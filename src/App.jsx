@@ -11,9 +11,23 @@ function getModel() {
       import('@tensorflow/tfjs'),
       import('@tensorflow-models/blazeface'),
     ]).then(async ([_tf, blazeface]) => {
-      // Load from our own Vercel deployment — no external CDN
-      const modelUrl = window.location.origin + '/blazeface/model.json'
+      // Load from our own deployment — works in Safari, no external CDN
+      // Must use absolute URL with no trailing slash
+      const base = window.location.origin
+      const modelUrl = `${base}/blazeface/model.json`
+      console.log('[SparkQB] Loading BlazeFace from:', modelUrl)
+      try {
+        // Verify the file is reachable before handing to TF
+        const check = await fetch(modelUrl)
+        if (!check.ok) throw new Error(`model.json returned ${check.status}`)
+        const json = await check.json()
+        console.log('[SparkQB] model.json loaded, format:', json.format, 'shards:', json.weightsManifest?.[0]?.paths)
+      } catch(e) {
+        console.error('[SparkQB] model.json fetch failed:', e)
+        throw e
+      }
       const model = await blazeface.load({ modelUrl })
+      console.log('[SparkQB] BlazeFace model ready')
       return model
     })
   }
