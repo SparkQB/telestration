@@ -97,6 +97,8 @@ function getPos(e, canvas) {
   const s  = e.touches ? e.touches[0] : e
   return { x: (s.clientX - r.left) * sx, y: (s.clientY - r.top) * sy }
 }
+// getPos already works correctly because getBoundingClientRect reflects
+// the CSS transform, so coordinates map directly to canvas space
 
 function drawArrow(ctx, x1, y1, x2, y2, color, lw, opacity) {
   const a  = Math.atan2(y2 - y1, x2 - x1)
@@ -293,6 +295,27 @@ export default function App() {
   const dragSt  = useRef(null)
   const csz     = useRef({ w: 1280, h: 720 })
   const shapesRef = useRef(shapes)
+
+  // ── Zoom / pan state ─────────────────────────────────────────────────────────
+  const [zoom,    setZoom]    = useState(1)
+  const [pan,     setPan]     = useState({ x: 0, y: 0 })
+  const zoomRef   = useRef(1)
+  const panRef    = useRef({ x: 0, y: 0 })
+  const isPanning = useRef(false)
+  const panStart  = useRef({ x: 0, y: 0, px: 0, py: 0 })
+  const pinchRef  = useRef(null) // { dist, zoom, px, py }
+
+  function resetView() {
+    zoomRef.current = 1; panRef.current = { x: 0, y: 0 }
+    setZoom(1); setPan({ x: 0, y: 0 })
+  }
+
+  function clampPan(px, py, z) {
+    const cw = csz.current.w, ch = csz.current.h
+    const maxX = (cw * z - cw) / 2
+    const maxY = (ch * z - ch) / 2
+    return { x: Math.max(-maxX, Math.min(maxX, px)), y: Math.max(-maxY, Math.min(maxY, py)) }
+  }
 
   useEffect(() => { shapesRef.current = shapes }, [shapes])
 
@@ -595,6 +618,7 @@ export default function App() {
       setVideoMeta({ w: v.videoWidth, h: v.videoHeight, fps })
       setDuration(v.duration)
       setCurrentT(0)
+      resetView()
     }
     v.onerror = (err) => console.error('Video load error:', err)
   }
@@ -730,14 +754,94 @@ export default function App() {
       </header>
 
       {/* Stage */}
-      <div className="stage" ref={wrapRef}>
+      <div className="stage" ref={wrapRef}
+        onWheel={e => {
+          e.preventDefault()
+          const delta = e.deltaY > 0 ? 0.9 : 1.1
+          const newZoom = Math.max(1, Math.min(8, zoomRef.current * delta))
+          const newPan = clampPan(panRef.current.x, panRef.current.y, newZoom)
+          zoomRef.current = newZoom; panRef.current = newPan
+          setZoom(newZoom); setPan(newPan)
+        }}
+      >
+        <div className="canvas-transform" style={{
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transformOrigin: 'center center',
+        }}>
         <canvas ref={bgRef} className="layer layer-bg"/>
         <canvas ref={drRef} className="layer layer-dr"/>
         <canvas ref={ovRef} className="layer layer-ov"
-          style={{ cursor: tool==='select'?'grab':tool==='eraser'?'cell':'crosshair' }}
-          onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
-          onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
+          style={{ cursor: zoom > 1 && tool==='select' ? 'grab' : tool==='select'?'grab':tool==='eraser'?'cell':'crosshair' }}
+          onMouseDown={e => {
+            // Two-finger pan on desktop (middle mouse or space+drag)
+            if (e.button === 1 || e.altKey) {
+              e.preventDefault()
+              isPanning.current = true
+              panStart.current = { x: e.clientX, y: e.clientY, px: panRef.current.x, py: panRef.current.y }
+              return
+            }
+            onDown(e)
+          }}
+          onMouseMove={e => {
+            if (isPanning.current) {
+              const dx = e.clientX - panStart.current.x
+              const dy = e.clientY - panStart.current.y
+              const newPan = clampPan(panStart.current.px + dx, panStart.current.py + dy, zoomRef.current)
+              panRef.current = newPan; setPan(newPan)
+              return
+            }
+            onMove(e)
+          }}
+          onMouseUp={e => { isPanning.current = false; onUp(e) }}
+          onMouseLeave={e => { isPanning.current = false; onUp(e) }}
+          onTouchStart={e => {
+            if (e.touches.length === 2) {
+              e.preventDefault()
+              const dx = e.touches[0].clientX - e.touches[1].clientX
+              const dy = e.touches[0].clientY - e.touches[1].clientY
+              const dist = Math.hypot(dx, dy)
+              const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2
+              const my = (e.touches[0].clientY + e.touches[1].clientY) / 2
+              pinchRef.current = { dist, zoom: zoomRef.current, px: panRef.current.x, py: panRef.current.y, mx, my }
+              return
+            }
+            onDown(e)
+          }}
+          onTouchMove={e => {
+            if (e.touches.length === 2 && pinchRef.current) {
+              e.preventDefault()
+              const dx = e.touches[0].clientX - e.touches[1].clientX
+              const dy = e.touches[0].clientY - e.touches[1].clientY
+              const dist = Math.hypot(dx, dy)
+              const scale = dist / pinchRef.current.dist
+              const newZoom = Math.max(1, Math.min(8, pinchRef.current.zoom * scale))
+              // Pan toward pinch center
+              const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2
+              const my = (e.touches[0].clientY + e.touches[1].clientY) / 2
+              const dpx = (mx - pinchRef.current.mx) 
+              const dpy = (my - pinchRef.current.my)
+              const newPan = clampPan(pinchRef.current.px + dpx, pinchRef.current.py + dpy, newZoom)
+              zoomRef.current = newZoom; panRef.current = newPan
+              setZoom(newZoom); setPan(newPan)
+              return
+            }
+            onMove(e)
+          }}
+          onTouchEnd={e => {
+            if (pinchRef.current && e.touches.length < 2) { pinchRef.current = null; return }
+            onUp(e)
+          }}
         />
+
+        </div>{/* end canvas-transform */}
+
+        {/* Zoom reset button — only shows when zoomed */}
+        {zoom > 1.05 && (
+          <button className="zoom-reset" onClick={resetView} title="Reset zoom">
+            <I d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0zM11 8v3M11 11h3" size={16}/>
+            {Math.round(zoom * 10) / 10}×
+          </button>
+        )}
 
         {/* Tool palette */}
         <div className={`palette ${isPortrait ? 'palette-right' : 'palette-bottom'}`}
