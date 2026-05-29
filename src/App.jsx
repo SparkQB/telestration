@@ -2,49 +2,44 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 import sparkqbLogo from './assets/sparkqb-logo.svg'
 import './App.css'
 
-// ── Face detection — self-hosted BlazeFace (works in Safari) ─────────────────
-let modelPromise = null
+// ── Face detection — face-api.js (Safari compatible, self-hosted) ────────────
+let faceApiPromise = null
 
-function getModel() {
-  if (!modelPromise) {
-    modelPromise = Promise.all([
-      import('@tensorflow/tfjs'),
-      import('@tensorflow-models/blazeface'),
-    ]).then(async ([tf, blazeface]) => {
-      const base = window.location.origin
-      const modelUrl = `${base}/blazeface/model.json`
-      console.log('[SparkQB] Loading BlazeFace from:', modelUrl)
+function getFaceApi() {
+  if (!faceApiPromise) {
+    faceApiPromise = import('face-api.js').then(async (faceapi) => {
+      const base = window.location.origin + '/faceapi'
+      console.log('[SparkQB] Loading face-api.js models from:', base)
 
-      // Load the underlying graph model directly — bypasses format detection issues in Safari
-      const graphModel = await tf.loadGraphModel(modelUrl)
-      console.log('[SparkQB] Graph model loaded')
+      // Load detection + landmark models in parallel
+      await Promise.all([
+        faceapi.nets.ssdMobilenetv1.loadFromUri(base),
+        faceapi.nets.faceLandmark68Net.loadFromUri(base),
+      ])
 
-      // Wrap it in a BlazeFaceModel instance manually
-      const model = new blazeface.BlazeFaceModel(
-        graphModel,
-        128, 128,  // input width, height
-        10,        // maxFaces
-        0.3,       // iouThreshold
-        0.75       // scoreThreshold
-      )
-      console.log('[SparkQB] BlazeFace model ready')
-      return model
+      console.log('[SparkQB] face-api.js models ready')
+      return faceapi
     })
   }
-  return modelPromise
+  return faceApiPromise
 }
 
 async function detectFacesInFrame(videoEl) {
-  const model = await getModel()
-  if (!model) return []
+  const faceapi = await getFaceApi()
   try {
-    const preds = await model.estimateFaces(videoEl, false)
-    return preds.map(p => ({
-      topLeft:     [p.topLeft[0],     p.topLeft[1]],
-      bottomRight: [p.bottomRight[0], p.bottomRight[1]],
+    // Detect all faces with landmarks
+    const detections = await faceapi
+      .detectAllFaces(videoEl, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      .withFaceLandmarks()
+
+    return detections.map(d => ({
+      topLeft:     [d.detection.box.x,                      d.detection.box.y],
+      bottomRight: [d.detection.box.x + d.detection.box.width,
+                    d.detection.box.y + d.detection.box.height],
+      landmarks:   d.landmarks.positions.map(p => ({ x: p.x, y: p.y })),
     }))
   } catch(e) {
-    console.warn('Detection error:', e)
+    console.warn('[SparkQB] Detection error:', e)
     return []
   }
 }
@@ -470,9 +465,10 @@ export default function App() {
     }
     setTfStatus('loading')
     try {
-      await getModel()  // preload — shows spinner while loading
+      await getFaceApi()  // preload — shows spinner while loading
       setTfStatus('ready')
     } catch(e) {
+      console.error('[SparkQB] Model load failed:', e)
       setTfStatus('error')
       alert('Could not load face tracking model. Make sure you have run download-model.js and committed the files to GitHub.')
       return

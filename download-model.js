@@ -1,67 +1,66 @@
 #!/usr/bin/env node
-// Run this once from your project root: node download-model.js
-// It downloads the BlazeFace model weights and saves them to public/blazeface/
-// After running, commit the files to GitHub and Vercel will serve them.
+// Run once from project root: node download-model.js
+// Downloads face-api.js model weights to public/faceapi/
+// Models: SSD MobileNet (detection) + Face Landmark 68 (landmarks)
 
 const https = require('https')
+const http  = require('http')
 const fs    = require('fs')
 const path  = require('path')
 
-const BASE   = 'https://tfhub.dev/tensorflow/tfjs-model/blazeface/1/default/1'
-const OUTDIR = path.join(__dirname, 'public', 'blazeface')
-
+const OUTDIR = path.join(__dirname, 'public', 'faceapi')
 if (!fs.existsSync(OUTDIR)) fs.mkdirSync(OUTDIR, { recursive: true })
+
+// face-api.js models hosted on GitHub
+const BASE = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'
+
+const FILES = [
+  // SSD MobileNet — face detection
+  'ssd_mobilenetv1_model-weights_manifest.json',
+  'ssd_mobilenetv1_model-shard1',
+  'ssd_mobilenetv1_model-shard2',
+  // Face Landmark 68 — facial landmarks
+  'face_landmark_68_model-weights_manifest.json',
+  'face_landmark_68_model-shard1',
+]
 
 function download(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest)
-    https.get(url, res => {
-      // Follow redirects
+    const protocol = url.startsWith('https') ? https : http
+    protocol.get(url, res => {
       if (res.statusCode === 301 || res.statusCode === 302) {
-        file.close()
-        fs.unlinkSync(dest)
+        file.close(); fs.unlinkSync(dest)
         return download(res.headers.location, dest).then(resolve).catch(reject)
       }
       if (res.statusCode !== 200) {
-        reject(new Error(`Failed: ${res.statusCode} for ${url}`))
-        return
+        reject(new Error(`HTTP ${res.statusCode} for ${url}`)); return
       }
       res.pipe(file)
       file.on('finish', () => { file.close(); resolve() })
     }).on('error', err => {
-      fs.unlinkSync(dest)
+      try { fs.unlinkSync(dest) } catch(e) {}
       reject(err)
     })
   })
 }
 
 async function run() {
-  console.log('Downloading BlazeFace model...')
-
-  // 1. Download model.json
-  const modelJsonUrl  = `${BASE}/model.json?tfjs-format=file`
-  const modelJsonPath = path.join(OUTDIR, 'model.json')
-  console.log('  model.json...')
-  await download(modelJsonUrl, modelJsonPath)
-
-  // 2. Parse model.json to find weight shard filenames
-  const modelJson   = JSON.parse(fs.readFileSync(modelJsonPath, 'utf8'))
-  const weightFiles = modelJson.weightsManifest
-    .flatMap(group => group.paths)
-
-  // 3. Download each weight shard
-  for (const fname of weightFiles) {
-    const url  = `${BASE}/${fname}?tfjs-format=file`
+  console.log('Downloading face-api.js models to public/faceapi/...\n')
+  for (const fname of FILES) {
+    const url  = `${BASE}/${fname}`
     const dest = path.join(OUTDIR, fname)
-    console.log(`  ${fname}...`)
-    await download(url, dest)
+    process.stdout.write(`  ${fname}... `)
+    try {
+      await download(url, dest)
+      const size = (fs.statSync(dest).size / 1024).toFixed(0)
+      console.log(`✓ ${size}kb`)
+    } catch(e) {
+      console.log(`✗ ${e.message}`)
+      process.exit(1)
+    }
   }
-
-  console.log(`\nDone! ${weightFiles.length + 1} files saved to public/blazeface/`)
-  console.log('Now commit these files to GitHub and redeploy.')
+  console.log('\nDone! Commit public/faceapi/ to GitHub and redeploy.')
 }
 
-run().catch(err => {
-  console.error('Error:', err.message)
-  process.exit(1)
-})
+run()
