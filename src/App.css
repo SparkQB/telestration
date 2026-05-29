@@ -305,13 +305,24 @@
 }
 .vb.play:hover { opacity: .85; }
 
-.scrub-wrap { flex: 1; }
+.scrub-wrap { flex: 1; display: flex; align-items: center; }
 .scrub {
   width: 100%;
   display: block;
+  height: 28px;  /* tall touch target for finger/iPad use */
+  cursor: pointer;
 }
-.scrub::-webkit-slider-runnable-track { background: var(--black4); }
-.scrub::-webkit-slider-thumb { border-color: var(--green); }
+.scrub::-webkit-slider-runnable-track {
+  background: var(--black4);
+  height: 6px;
+  border-radius: 3px;
+}
+.scrub::-webkit-slider-thumb {
+  border-color: var(--green);
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+}
 
 .speed-btn {
   font-family: 'Roboto Mono', monospace;
