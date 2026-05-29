@@ -196,7 +196,7 @@ function renderShape(ctx, s, selected = false) {
 // ── Pixelate blur region ──────────────────────────────────────────────────────
 function renderPixelate(drCtx, bgCanvas, x, y, w, h, selected, tracking) {
   if (w < 4 || h < 4) return
-  const blockSize = 14
+  const blockSize = 8
   const tmp = document.createElement('canvas')
   tmp.width = w; tmp.height = h
   const tctx = tmp.getContext('2d')
@@ -215,21 +215,15 @@ function renderPixelate(drCtx, bgCanvas, x, y, w, h, selected, tracking) {
   drCtx.fillStyle = 'rgba(16,18,20,0.28)'
   drCtx.fillRect(x, y, w, h)
 
-  // border
-  drCtx.strokeStyle = tracking ? '#B2FF00' : (selected ? '#B2FF00' : 'rgba(178,255,0,0.3)')
-  drCtx.lineWidth   = selected || tracking ? 2 : 1
-  if (selected || tracking) { drCtx.shadowColor = '#B2FF00'; drCtx.shadowBlur = 8 }
-  if (selected) drCtx.setLineDash([4,4])
-  drCtx.strokeRect(x, y, w, h)
-  drCtx.setLineDash([])
-
-  // tracking badge
-  if (tracking) {
-    drCtx.shadowBlur = 0
-    drCtx.fillStyle = '#B2FF00'
-    drCtx.font = '700 10px Roboto Mono, monospace'
-    drCtx.textAlign = 'left'
-    drCtx.fillText('● TRACKING', x + 4, y - 5)
+  // only show border when selected, nothing when tracking
+  if (selected) {
+    drCtx.setLineDash([4,4])
+    drCtx.strokeStyle = '#B2FF00'
+    drCtx.lineWidth = 1.5
+    drCtx.shadowColor = '#B2FF00'
+    drCtx.shadowBlur = 8
+    drCtx.strokeRect(x, y, w, h)
+    drCtx.setLineDash([])
   }
 
   drCtx.restore()
@@ -437,7 +431,7 @@ export default function App() {
 
       const [tx, ty]   = closest.topLeft
       const [tx2, ty2] = closest.bottomRight
-      const pad = 0.3
+      const pad = 0.1
       const fw  = (tx2 - tx) * scaleX
       const fh  = (ty2 - ty) * scaleY
       const nx  = tx * scaleX - fw * pad
