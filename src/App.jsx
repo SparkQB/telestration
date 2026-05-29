@@ -29,7 +29,7 @@ async function detectFacesInFrame(videoEl) {
   try {
     // Detect all faces with landmarks
     const detections = await faceapi
-      .detectAllFaces(videoEl, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      .detectAllFaces(videoEl, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.35 }))
       .withFaceLandmarks()
 
     return detections.map(d => ({
@@ -261,7 +261,7 @@ export default function App() {
   // Face tracking refs
   const trackingRef    = useRef({})    // shapeId -> bool
   const lastDetectRef  = useRef(0)     // timestamp of last detection
-  const DETECT_INTERVAL = 80           // ms between detections (~12fps)
+  const DETECT_INTERVAL = 50           // ms between detections (~20fps)
   const apiAvailable   = useRef(null)  // null=unknown, true/false
   const lastKnownPos   = useRef({})    // shapeId -> {x,y,w,h} last detected position
 
@@ -426,33 +426,18 @@ export default function App() {
         if (dist < minDist) { minDist = dist; closest = p }
       })
 
-      // No face detected — hold last known position, don't jump
-      if (!closest) {
-        const last = lastKnownPos.current[s.id]
-        if (last) return { ...s, x: last.x, y: last.y, w: last.w, h: last.h }
-        return s
-      }
+      // No face detected — hide box (return unchanged, won't render differently)
+      if (!closest) return s
 
       const [tx, ty]   = closest.topLeft
       const [tx2, ty2] = closest.bottomRight
       const pad = 0.1
       const fw  = (tx2 - tx) * scaleX
       const fh  = (ty2 - ty) * scaleY
-      const targetX = tx * scaleX - fw * pad
-      const targetY = ty * scaleY - fh * pad
-      const targetW = fw * (1 + pad * 2)
-      const targetH = fh * (1 + pad * 2)
-
-      // Smooth re-entry — lerp from current position to detected position
-      // 0.35 = snappy enough to track but smooth enough to not jump
-      const LERP = lastKnownPos.current[s.id] ? 0.35 : 1.0
-      const nx = s.x + (targetX - s.x) * LERP
-      const ny = s.y + (targetY - s.y) * LERP
-      const nw = s.w + (targetW - s.w) * LERP
-      const nh = s.h + (targetH - s.h) * LERP
-
-      // Store last known good position
-      lastKnownPos.current[s.id] = { x: nx, y: ny, w: nw, h: nh }
+      const nx  = tx * scaleX - fw * pad
+      const ny  = ty * scaleY - fh * pad
+      const nw  = fw * (1 + pad * 2)
+      const nh  = fh * (1 + pad * 2)
 
       updated = true
       return { ...s, x: nx, y: ny, w: nw, h: nh }
