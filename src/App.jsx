@@ -2,16 +2,37 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 import sparkqbLogo from './assets/sparkqb-logo.svg'
 import './App.css'
 
-// ── Lazy-load TF so it doesn't block initial render ───────────────────────────
-let tfPromise = null
-function getTF() {
-  if (!tfPromise) {
-    tfPromise = Promise.all([
+// ── Face detection — self-hosted BlazeFace (works in Safari) ─────────────────
+let modelPromise = null
+
+function getModel() {
+  if (!modelPromise) {
+    modelPromise = Promise.all([
       import('@tensorflow/tfjs'),
       import('@tensorflow-models/blazeface'),
-    ]).then(([tf, blazeface]) => ({ tf, blazeface }))
+    ]).then(async ([_tf, blazeface]) => {
+      // Load from our own Vercel deployment — no external CDN
+      const modelUrl = window.location.origin + '/blazeface/model.json'
+      const model = await blazeface.load({ modelUrl })
+      return model
+    })
   }
-  return tfPromise
+  return modelPromise
+}
+
+async function detectFacesInFrame(videoEl) {
+  const model = await getModel()
+  if (!model) return []
+  try {
+    const preds = await model.estimateFaces(videoEl, false)
+    return preds.map(p => ({
+      topLeft:     [p.topLeft[0],     p.topLeft[1]],
+      bottomRight: [p.bottomRight[0], p.bottomRight[1]],
+    }))
+  } catch(e) {
+    console.warn('Detection error:', e)
+    return []
+  }
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -235,10 +256,10 @@ export default function App() {
   const rafRef  = useRef(null)
 
   // Face tracking refs
-  const blazeRef       = useRef(null)  // loaded model
   const trackingRef    = useRef({})    // shapeId -> bool
   const lastDetectRef  = useRef(0)     // timestamp of last detection
   const DETECT_INTERVAL = 80           // ms between detections (~12fps)
+  const apiAvailable   = useRef(null)  // null=unknown, true/false
 
   const hist = useHistory([])
   const { shapes, push, undo, redo, canUndo, canRedo } = hist
@@ -363,55 +384,41 @@ export default function App() {
   }, [videoMeta, renderBg])
 
   // ── Face detection ────────────────────────────────────────────────────────────
-  async function loadBlazeFace() {
-    if (blazeRef.current) return blazeRef.current
-    setTfStatus('loading')
-    try {
-      const { blazeface } = await getTF()
-      const model = await blazeface.load()
-      blazeRef.current = model
-      setTfStatus('ready')
-      return model
-    } catch(e) {
-      console.error('BlazeFace load error:', e)
-      setTfStatus('error')
-      return null
-    }
-  }
-
-  async function detectFaces() {
-    const model = blazeRef.current || await loadBlazeFace()
-    if (!model || !vidRef.current) return []
-    try {
-      const predictions = await model.estimateFaces(vidRef.current, false)
-      return predictions
-    } catch(e) { return [] }
-  }
-
-  // For a given blur shape, find the closest detected face and update position
   async function detectAndUpdateBlurs() {
-    const preds = await detectFaces()
+    if (!vidRef.current) return
+    const cv = bgRef.current; if (!cv) return
+
+    // Scale from video native coords to canvas display coords
+    const scaleX = cv.width  / (vidRef.current.videoWidth  || cv.width)
+    const scaleY = cv.height / (vidRef.current.videoHeight || cv.height)
+
+    let preds = []
+    try {
+      preds = await detectFacesInFrame(vidRef.current)
+      if (apiAvailable.current === null) {
+        apiAvailable.current = true
+        setTfStatus('ready')
+      }
+    } catch(e) {
+      apiAvailable.current = false
+      setTfStatus('error')
+      return
+    }
+
     if (!preds.length) return
 
     const currentShapes = shapesRef.current
-    const cv = bgRef.current
-    if (!cv) return
-
-    // Scale factors from video native -> canvas display
-    const scaleX = cv.width  / (vidRef.current?.videoWidth  || cv.width)
-    const scaleY = cv.height / (vidRef.current?.videoHeight || cv.height)
-
     let updated = false
+
     const newShapes = currentShapes.map(s => {
       if (s.type !== 'blur' || !trackingRef.current[s.id]) return s
 
-      // Find the nearest face to the current blur center
       const cx = Math.min(s.x, s.x + s.w) + Math.abs(s.w) / 2
       const cy = Math.min(s.y, s.y + s.h) + Math.abs(s.h) / 2
 
       let closest = null, minDist = Infinity
       preds.forEach(p => {
-        const [fx, fy] = p.topLeft
+        const [fx, fy]   = p.topLeft
         const [fx2, fy2] = p.bottomRight
         const fcx = (fx + fx2) / 2 * scaleX
         const fcy = (fy + fy2) / 2 * scaleY
@@ -421,10 +428,9 @@ export default function App() {
 
       if (!closest) return s
 
-      // Expand box slightly for better coverage
       const [tx, ty]   = closest.topLeft
       const [tx2, ty2] = closest.bottomRight
-      const pad = 0.25  // 25% padding around face
+      const pad = 0.3
       const fw  = (tx2 - tx) * scaleX
       const fh  = (ty2 - ty) * scaleY
       const nx  = tx * scaleX - fw * pad
@@ -437,7 +443,6 @@ export default function App() {
     })
 
     if (updated) {
-      // Update shapes ref directly for smooth animation, push to history throttled
       shapesRef.current = newShapes
       renderShapes(newShapes, null, null, trackingRef.current)
     }
@@ -447,18 +452,21 @@ export default function App() {
   async function toggleTracking(shapeId) {
     const already = trackingRef.current[shapeId]
     if (already) {
-      // Turn off
       trackingRef.current = { ...trackingRef.current, [shapeId]: false }
       setTracking({ ...trackingRef.current })
       return
     }
-    // Turn on — load model if needed
     setTfStatus('loading')
-    const model = await loadBlazeFace()
-    if (!model) return
+    try {
+      await getModel()  // preload — shows spinner while loading
+      setTfStatus('ready')
+    } catch(e) {
+      setTfStatus('error')
+      alert('Could not load face tracking model. Make sure you have run download-model.js and committed the files to GitHub.')
+      return
+    }
     trackingRef.current = { ...trackingRef.current, [shapeId]: true }
     setTracking({ ...trackingRef.current })
-    // Run detection immediately
     await detectAndUpdateBlurs()
   }
 
@@ -750,28 +758,39 @@ export default function App() {
           ))}
         </div>
 
-        {/* Track face button — appears when a blur box is selected */}
-        {selectedIsBlur && (
-          <div className="track-bar" onClick={e => e.stopPropagation()}>
-            <button
-              className={`track-btn ${tracking[selId] ? 'tracking' : ''}`}
-              onClick={() => toggleTracking(selId)}
-              disabled={tfStatus === 'loading'}
-            >
-              {tfStatus === 'loading' ? (
-                <><span className="spin">⟳</span> LOADING MODEL…</>
-              ) : tracking[selId] ? (
-                <><I d="M6 18L18 6M6 6l12 12" size={14}/> STOP TRACKING</>
-              ) : (
-                <><I d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM12 8v4l3 3" size={14}/> TRACK FACE</>
-              )}
-            </button>
-            <button className="del-btn-inline"
-              onClick={() => { push(shapes.filter(s => s.id !== selId)); delete trackingRef.current[selId]; setTracking({...trackingRef.current}); setSelId(null) }}>
-              <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={13}/> DELETE
-            </button>
-          </div>
-        )}
+        {/* Track face overlay — sits directly on the blur box */}
+        {selectedIsBlur && (() => {
+          const b = bounds(selectedShape)
+          if (!b || !bgRef.current) return null
+          const cw = bgRef.current.width
+          const ch = bgRef.current.height
+          // Center of the blur box in % of canvas
+          const cx = ((b.x + b.w / 2) / cw * 100)
+          const cy = ((b.y + b.h / 2) / ch * 100)
+          return (
+            <div className="blur-overlay"
+              style={{ left: cx + '%', top: cy + '%' }}
+              onClick={e => e.stopPropagation()}>
+              <button
+                className={`track-btn ${tracking[selId] ? 'tracking' : ''}`}
+                onClick={() => toggleTracking(selId)}
+                disabled={tfStatus === 'loading'}
+              >
+                {tfStatus === 'loading' ? (
+                  <><span className="spin">⟳</span> LOADING…</>
+                ) : tracking[selId] ? (
+                  <><I d="M6 18L18 6M6 6l12 12" size={13}/> STOP</>
+                ) : (
+                  <><I d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM12 8v4l3 3" size={13}/> TRACK FACE</>
+                )}
+              </button>
+              <button className="del-btn-inline"
+                onClick={() => { push(shapes.filter(s => s.id !== selId)); delete trackingRef.current[selId]; setTracking({...trackingRef.current}); setSelId(null) }}>
+                <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={13}/>
+              </button>
+            </div>
+          )
+        })()}
 
         {/* Inline text input */}
         {pendingTxt && (() => {

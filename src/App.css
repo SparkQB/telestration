@@ -484,21 +484,20 @@
 }
 .load-btn:hover { opacity: .88; }
 
-/* ── Track face bar ─────────────────────────────────────────────────────── */
-.track-bar {
+/* ── Track face overlay — sits on the blur box ──────────────────────────── */
+.blur-overlay {
   position: absolute;
   z-index: 40;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   display: flex;
-  gap: 6px;
+  gap: 5px;
   align-items: center;
-  background: rgba(16,18,20,0.95);
-  border: 1px solid rgba(178,255,0,0.2);
+  background: rgba(16,18,20,0.92);
+  border: 1px solid rgba(178,255,0,0.25);
   border-radius: 10px;
-  padding: 6px 8px;
+  padding: 5px 7px;
   backdrop-filter: blur(8px);
+  pointer-events: all;
 }
 
 .track-btn {
