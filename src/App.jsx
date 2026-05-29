@@ -375,20 +375,18 @@ export default function App() {
   // ── Video frame loop ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!videoMeta) return
-    const loop = async (ts) => {
+    const loop = (ts) => {
       renderBg()
       if (vidRef.current) setCurrentT(vidRef.current.currentTime)
 
-      // Run face detection if we have tracked blurs
+      // Always render shapes every frame — never block on detection
+      renderShapes(shapesRef.current, null, null, trackingRef.current)
+
+      // Fire detection in background — doesn't block RAF
       const hasTracked = Object.values(trackingRef.current).some(Boolean)
-      if (hasTracked && blazeRef.current && ts - lastDetectRef.current > DETECT_INTERVAL) {
+      if (hasTracked && ts - lastDetectRef.current > DETECT_INTERVAL) {
         lastDetectRef.current = ts
-        await detectAndUpdateBlurs()
-      } else if (hasTracked) {
-        // Re-render with current positions
-        renderShapes(shapesRef.current, null, null, trackingRef.current)
-      } else {
-        renderShapes(shapesRef.current, null, null, trackingRef.current)
+        detectAndUpdateBlurs() // intentionally NOT awaited
       }
 
       rafRef.current = requestAnimationFrame(loop)
