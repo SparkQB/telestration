@@ -270,15 +270,16 @@
 
 /* ── Video bar ──────────────────────────────────────────────────────────── */
 .vbar {
-  height: 50px;
   background: var(--black2);
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
   padding: 0 10px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
   gap: 6px;
   flex-shrink: 0;
   z-index: 20;
+  min-height: 50px;
 }
 
 .vb {
