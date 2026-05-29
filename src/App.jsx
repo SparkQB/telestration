@@ -10,23 +10,23 @@ function getModel() {
     modelPromise = Promise.all([
       import('@tensorflow/tfjs'),
       import('@tensorflow-models/blazeface'),
-    ]).then(async ([_tf, blazeface]) => {
-      // Load from our own deployment — works in Safari, no external CDN
-      // Must use absolute URL with no trailing slash
+    ]).then(async ([tf, blazeface]) => {
       const base = window.location.origin
       const modelUrl = `${base}/blazeface/model.json`
       console.log('[SparkQB] Loading BlazeFace from:', modelUrl)
-      try {
-        // Verify the file is reachable before handing to TF
-        const check = await fetch(modelUrl)
-        if (!check.ok) throw new Error(`model.json returned ${check.status}`)
-        const json = await check.json()
-        console.log('[SparkQB] model.json loaded, format:', json.format, 'shards:', json.weightsManifest?.[0]?.paths)
-      } catch(e) {
-        console.error('[SparkQB] model.json fetch failed:', e)
-        throw e
-      }
-      const model = await blazeface.load({ modelUrl })
+
+      // Load the underlying graph model directly — bypasses format detection issues in Safari
+      const graphModel = await tf.loadGraphModel(modelUrl)
+      console.log('[SparkQB] Graph model loaded')
+
+      // Wrap it in a BlazeFaceModel instance manually
+      const model = new blazeface.BlazeFaceModel(
+        graphModel,
+        128, 128,  // input width, height
+        10,        // maxFaces
+        0.3,       // iouThreshold
+        0.75       // scoreThreshold
+      )
       console.log('[SparkQB] BlazeFace model ready')
       return model
     })
