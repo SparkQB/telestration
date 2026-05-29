@@ -577,22 +577,38 @@ export default function App() {
   // ── Video ─────────────────────────────────────────────────────────────────────
   function onFileLoad(e) {
     const file = e.target.files?.[0]; if (!file) return
-    const url  = URL.createObjectURL(file)
-    const v    = vidRef.current
-    v.src = url
+    // Revoke previous URL to avoid memory leak
+    if (vidRef.current.src) URL.revokeObjectURL(vidRef.current.src)
+    const url = URL.createObjectURL(file)
+    const v   = vidRef.current
+    v.muted   = true
+    v.src     = url
+    v.load()  // required on Safari to trigger metadata load
     v.onloadedmetadata = () => {
       let fps = 30
-      if (v.videoTracks?.[0]) fps = v.videoTracks[0].getSettings().frameRate || 30
+      try {
+        if (v.videoTracks?.[0]) fps = v.videoTracks[0].getSettings().frameRate || 30
+      } catch(e) {}
       setVideoMeta({ w: v.videoWidth, h: v.videoHeight, fps })
       setDuration(v.duration)
+      setCurrentT(0)
     }
+    v.onerror = (err) => console.error('Video load error:', err)
   }
 
   function togglePlay() {
     const v = vidRef.current; if (!v) return
     v.playbackRate = SPEEDS[speedIdx]
-    if (v.paused) { v.play(); setPlaying(true) }
-    else { v.pause(); setPlaying(false) }
+    v.muted = true  // required for autoplay on Safari
+    if (v.paused) {
+      v.play().then(() => setPlaying(true)).catch(err => {
+        console.warn('Play failed:', err)
+        setPlaying(false)
+      })
+    } else {
+      v.pause()
+      setPlaying(false)
+    }
   }
 
   function seek(val) {
@@ -671,6 +687,12 @@ export default function App() {
   const isPortrait = videoMeta ? videoMeta.h > videoMeta.w : false
   const selectedShape = shapes.find(s => s.id === selId)
   const selectedIsBlur = selectedShape?.type === 'blur'
+
+  // Also show track UI when blur tool is active and hovering over a blur shape
+  // Find the most recently placed blur shape to show controls on
+  const activeBlurId = selectedIsBlur ? selId :
+    (tool === 'blur' ? shapes.filter(s => s.type === 'blur').slice(-1)[0]?.id : null)
+  const activeBlurShape = shapes.find(s => s.id === activeBlurId)
 
   return (
     <div className={`app ${isPortrait ? 'portrait' : 'landscape'}`} onClick={() => setPopover(null)}>
@@ -759,8 +781,8 @@ export default function App() {
         </div>
 
         {/* Track face overlay — sits directly on the blur box */}
-        {selectedIsBlur && (() => {
-          const b = bounds(selectedShape)
+        {activeBlurShape && (() => {
+          const b = bounds(activeBlurShape)
           if (!b || !bgRef.current) return null
           const cw = bgRef.current.width
           const ch = bgRef.current.height
@@ -772,8 +794,8 @@ export default function App() {
               style={{ left: cx + '%', top: cy + '%' }}
               onClick={e => e.stopPropagation()}>
               <button
-                className={`track-btn ${tracking[selId] ? 'tracking' : ''}`}
-                onClick={() => toggleTracking(selId)}
+                className={`track-btn ${tracking[activeBlurId] ? 'tracking' : ''}`}
+                onClick={() => toggleTracking(activeBlurId)}
                 disabled={tfStatus === 'loading'}
               >
                 {tfStatus === 'loading' ? (
@@ -785,7 +807,7 @@ export default function App() {
                 )}
               </button>
               <button className="del-btn-inline"
-                onClick={() => { push(shapes.filter(s => s.id !== selId)); delete trackingRef.current[selId]; setTracking({...trackingRef.current}); setSelId(null) }}>
+                onClick={() => { push(shapes.filter(s => s.id !== activeBlurId)); delete trackingRef.current[activeBlurId]; setTracking({...trackingRef.current}); setSelId(null) }}>
                 <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={13}/>
               </button>
             </div>
@@ -836,7 +858,7 @@ export default function App() {
         </div>
       )}
 
-      <video ref={vidRef} style={{display:'none'}} playsInline loop onEnded={() => setPlaying(false)}/>
+      <video ref={vidRef} style={{display:'none'}} playsInline loop muted onEnded={() => setPlaying(false)}/>
       <input ref={fileRef} type="file" accept="video/*" style={{display:'none'}} onChange={onFileLoad}/>
 
       {/* Player label modal */}
