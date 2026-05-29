@@ -263,6 +263,7 @@ export default function App() {
   const lastDetectRef  = useRef(0)     // timestamp of last detection
   const DETECT_INTERVAL = 80           // ms between detections (~12fps)
   const apiAvailable   = useRef(null)  // null=unknown, true/false
+  const lastKnownPos   = useRef({})    // shapeId -> {x,y,w,h} last detected position
 
   const hist = useHistory([])
   const { shapes, push, undo, redo, canUndo, canRedo } = hist
@@ -389,7 +390,6 @@ export default function App() {
     if (!vidRef.current) return
     const cv = bgRef.current; if (!cv) return
 
-    // Scale from video native coords to canvas display coords
     const scaleX = cv.width  / (vidRef.current.videoWidth  || cv.width)
     const scaleY = cv.height / (vidRef.current.videoHeight || cv.height)
 
@@ -406,8 +406,6 @@ export default function App() {
       return
     }
 
-    if (!preds.length) return
-
     const currentShapes = shapesRef.current
     let updated = false
 
@@ -417,6 +415,7 @@ export default function App() {
       const cx = Math.min(s.x, s.x + s.w) + Math.abs(s.w) / 2
       const cy = Math.min(s.y, s.y + s.h) + Math.abs(s.h) / 2
 
+      // Find closest detected face to current box center
       let closest = null, minDist = Infinity
       preds.forEach(p => {
         const [fx, fy]   = p.topLeft
@@ -427,17 +426,33 @@ export default function App() {
         if (dist < minDist) { minDist = dist; closest = p }
       })
 
-      if (!closest) return s
+      // No face detected — hold last known position, don't jump
+      if (!closest) {
+        const last = lastKnownPos.current[s.id]
+        if (last) return { ...s, x: last.x, y: last.y, w: last.w, h: last.h }
+        return s
+      }
 
       const [tx, ty]   = closest.topLeft
       const [tx2, ty2] = closest.bottomRight
       const pad = 0.1
       const fw  = (tx2 - tx) * scaleX
       const fh  = (ty2 - ty) * scaleY
-      const nx  = tx * scaleX - fw * pad
-      const ny  = ty * scaleY - fh * pad
-      const nw  = fw * (1 + pad * 2)
-      const nh  = fh * (1 + pad * 2)
+      const targetX = tx * scaleX - fw * pad
+      const targetY = ty * scaleY - fh * pad
+      const targetW = fw * (1 + pad * 2)
+      const targetH = fh * (1 + pad * 2)
+
+      // Smooth re-entry — lerp from current position to detected position
+      // 0.35 = snappy enough to track but smooth enough to not jump
+      const LERP = lastKnownPos.current[s.id] ? 0.35 : 1.0
+      const nx = s.x + (targetX - s.x) * LERP
+      const ny = s.y + (targetY - s.y) * LERP
+      const nw = s.w + (targetW - s.w) * LERP
+      const nh = s.h + (targetH - s.h) * LERP
+
+      // Store last known good position
+      lastKnownPos.current[s.id] = { x: nx, y: ny, w: nw, h: nh }
 
       updated = true
       return { ...s, x: nx, y: ny, w: nw, h: nh }
@@ -454,6 +469,7 @@ export default function App() {
     const already = trackingRef.current[shapeId]
     if (already) {
       trackingRef.current = { ...trackingRef.current, [shapeId]: false }
+      delete lastKnownPos.current[shapeId]
       setTracking({ ...trackingRef.current })
       return
     }
