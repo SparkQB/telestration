@@ -1,0 +1,51 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --black:   #101214;
+  --black2:  #161a1d;
+  --black3:  #1d2226;
+  --black4:  #242a2f;
+  --white:   #F8F8F8;
+  --green:   #B2FF00;
+  --blue:    #004FFF;
+  --red:     #FF0400;
+  --muted:   rgba(248,248,248,0.35);
+  --border:  rgba(248,248,248,0.07);
+  --border2: rgba(178,255,0,0.18);
+}
+
+html, body, #root {
+  height: 100%; width: 100%;
+  overflow: hidden;
+  background: var(--black);
+  color: var(--white);
+  font-family: 'Inter', sans-serif;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+
+input[type=range] {
+  -webkit-appearance: none;
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; background: var(--black4); border-radius: 2px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--white); border: 2px solid var(--green);
+  margin-top: -6px;
+}
+input[type=color] {
+  -webkit-appearance: none;
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid var(--border); cursor: pointer;
+  padding: 2px; background: var(--black3);
+}
