@@ -551,7 +551,12 @@ export default function App() {
     else if (s.type==='arrow')  { s.x2=pos.x; s.y2=pos.y }
     else if (s.type==='circle') s.r = Math.hypot(pos.x-s.cx, pos.y-s.cy)
     else if (s.type==='rect'||s.type==='blur') { s.w=pos.x-s.x; s.h=pos.y-s.y }
-    renderShapes(shapes, s, selId, trackingRef.current)
+
+    // Draw live preview on overlay canvas so it's visible while drawing
+    const oc = ovRef.current; if (!oc) return
+    const octx = oc.getContext('2d')
+    octx.clearRect(0, 0, oc.width, oc.height)
+    renderShape(octx, s, false)
   }
 
   function onUp(e) {
@@ -574,6 +579,10 @@ export default function App() {
     if (!drawing.current || !stroke.current) return
     drawing.current = false
     const s = stroke.current; stroke.current = null
+
+    // Clear the live preview from overlay canvas
+    const oc = ovRef.current
+    if (oc) oc.getContext('2d').clearRect(0, 0, oc.width, oc.height)
     const valid = (s.type==='pen'||s.type==='route') ? s.pts.length>2
       : s.type==='arrow'  ? Math.hypot(s.x2-s.x1,s.y2-s.y1)>8
       : s.type==='circle' ? s.r>5
