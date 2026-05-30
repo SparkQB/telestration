@@ -612,13 +612,21 @@ export default function App() {
     drawPoseOverlay(ctx, poseLandmarks.current, poseWorldLandmarks.current, anglesEnabled, c.width, c.height)
   }
 
+  const poseLastTime = useRef(-1)  // last video time we detected on
+
   async function runPoseDetection() {
     const pose = (await import('./pose.js')).getPoseInstance()
     if (!pose) return
     if (!vidRef.current) return
-    // Don't re-detect on a paused frame — hold last position to prevent drift
-    if (vidRef.current.paused && poseLandmarks.current) return
+
+    const t = vidRef.current.currentTime
+    const paused = vidRef.current.paused
+
+    // When paused: only detect once per unique timestamp (no drift)
+    if (paused && poseLastTime.current === t) return
+
     poseDetecting.current = true
+    poseLastTime.current = t
     try {
       await pose.send({ image: vidRef.current })
     } catch(e) {
