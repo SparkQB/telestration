@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 import sparkqbLogo from './assets/sparkqb-logo.svg'
 import sparkqbMark from './assets/sparkqb-logomark.svg'
+import LeadGate, { isLeadSubmitted } from './LeadGate.jsx'
 import { loadPose, drawPoseOverlay, ANGLE_JOINTS, calcJointAngle } from './pose.js'
 import './App.css'
 
@@ -363,6 +364,8 @@ export default function App() {
   const [animating,   setAnimating]   = useState(false)
   const [tfStatus,    setTfStatus]    = useState('idle') // idle|loading|ready|error
   const [tracking,    setTracking]    = useState({})     // shapeId -> bool (reactive mirror of trackingRef)
+
+  const [unlocked, setUnlocked] = useState(isLeadSubmitted())
 
   const drawing = useRef(false)
   const stroke  = useRef(null)
