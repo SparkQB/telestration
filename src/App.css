@@ -587,3 +587,98 @@
   transition: all .15s;
 }
 .zoom-reset:hover { background: rgba(178,255,0,0.12); }
+
+/* ── Pose layer ─────────────────────────────────────────────────────────── */
+.layer-pose {
+  z-index: 3;
+  pointer-events: none;
+}
+.layer-ov { z-index: 4; }
+
+/* ── Pose button ────────────────────────────────────────────────────────── */
+.pose-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--black3);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: 'Roboto Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  transition: all .15s;
+  cursor: pointer;
+}
+.pose-btn:hover:not(:disabled) { border-color: #00E5FF; color: #00E5FF; }
+.pose-btn.active { background: rgba(0,229,255,0.12); color: #00E5FF; border-color: rgba(0,229,255,0.4); }
+.pose-btn:disabled { opacity: .5; cursor: wait; }
+
+/* ── Angle panel ────────────────────────────────────────────────────────── */
+.angle-panel {
+  position: absolute;
+  z-index: 50;
+  top: 10px;
+  left: 10px;
+  background: rgba(16,18,20,0.96);
+  border: 1px solid rgba(0,229,255,0.25);
+  border-radius: 12px;
+  padding: 12px;
+  width: 220px;
+  backdrop-filter: blur(10px);
+}
+.angle-panel-head {
+  font-family: 'Anton', sans-serif;
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  color: #00E5FF;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.angle-panel-head button {
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+.angle-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.angle-chip {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 5px 8px;
+  border-radius: 6px;
+  text-align: center;
+  transition: all .12s;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+}
+.angle-chip.on  { background: rgba(0,229,255,0.15); color: #00E5FF; border: 1px solid rgba(0,229,255,0.3); }
+.angle-chip.off { background: var(--black3); color: var(--muted); border: 1px solid var(--border); }
+.angle-panel-actions {
+  display: flex;
+  gap: 6px;
+}
+.angle-panel-actions button {
+  flex: 1;
+  font-family: 'Roboto Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 5px;
+  border-radius: 6px;
+  background: var(--black3);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all .12s;
+}
+.angle-panel-actions button:hover { color: var(--white); border-color: var(--muted); }
