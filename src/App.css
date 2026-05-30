@@ -486,8 +486,22 @@
   .mode-tabs button { padding: 3px 8px; font-size: 10px; }
   .tb-btn { width: 30px; height: 30px; }
   .pal-btn { width: 34px; height: 34px; }
-  .vbar { padding: 0 6px; gap: 4px; }
+  .vbar {
+    padding: 0 6px;
+    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+    min-height: unset;
+    padding-top: 6px;
+  }
+  .scrub-wrap {
+    order: -1;
+    width: 100%;
+    flex: unset;
+  }
   .tc { display: none; }
+  .release-btns { gap: 3px; }
+  .release-mark-btn { font-size: 8px; padding: 3px 5px; }
 }
 
 /* ── Load film button ───────────────────────────────────────────────────── */
