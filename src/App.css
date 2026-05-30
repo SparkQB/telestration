@@ -136,6 +136,7 @@
   align-items: center;
   justify-content: center;
   color: var(--muted);
+  font-family: 'Roboto Mono', monospace;
   transition: all .12s;
 }
 .pal-btn:hover { background: var(--black3); color: var(--white); }
@@ -631,9 +632,10 @@
   backdrop-filter: blur(10px);
 }
 .angle-panel-head {
-  font-family: 'Anton', sans-serif;
-  font-size: 13px;
-  letter-spacing: 1.5px;
+  font-family: 'Roboto Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
   color: #00E5FF;
   margin-bottom: 10px;
   display: flex;
