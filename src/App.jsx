@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 import sparkqbLogo from './assets/sparkqb-logo.svg'
+import { loadPose, drawPoseOverlay, ANGLE_JOINTS } from './pose.js'
 import './App.css'
 
 // ── Face detection — face-api.js (Safari compatible, self-hosted) ────────────
@@ -296,6 +297,18 @@ export default function App() {
   const csz     = useRef({ w: 1280, h: 720 })
   const shapesRef = useRef(shapes)
 
+  // ── Pose state ───────────────────────────────────────────────────────────────
+  const [poseEnabled,   setPoseEnabled]   = useState(false)
+  const [poseStatus,    setPoseStatus]    = useState('idle') // idle|loading|ready|error
+  const [showAnglePanel,setShowAnglePanel]= useState(false)
+  const [enabledAngles, setEnabledAngles] = useState(
+    Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true]))
+  )
+  const poseCanvasRef  = useRef(null)
+  const poseLandmarks  = useRef(null)
+  const poseDetecting  = useRef(false)
+  const POSE_INTERVAL  = 60  // ms between pose detections
+
   // ── Zoom / pan state ─────────────────────────────────────────────────────────
   const [zoom,    setZoom]    = useState(1)
   const [pan,     setPan]     = useState({ x: 0, y: 0 })
@@ -330,7 +343,7 @@ export default function App() {
     if (h > ah) { h = ah; w = ah * ratio }
     w = Math.floor(w); h = Math.floor(h)
     csz.current = { w, h }
-    ;[bgRef, drRef, ovRef].forEach(r => {
+    ;[bgRef, drRef, poseCanvasRef, ovRef].forEach(r => {
       if (!r.current) return
       r.current.width  = w; r.current.height = h
       r.current.style.width  = w + 'px'; r.current.style.height = h + 'px'
@@ -384,6 +397,7 @@ export default function App() {
   }, [])
 
   useEffect(() => { renderShapes(shapes, null, selId) }, [shapes, selId, renderShapes])
+  useEffect(() => { renderPoseOverlay() }, [enabledAngles])
 
   // ── Video frame loop ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -395,11 +409,17 @@ export default function App() {
       // Always render shapes every frame — never block on detection
       renderShapes(shapesRef.current, null, null, trackingRef.current)
 
-      // Fire detection in background — doesn't block RAF
+      // Fire face detection in background
       const hasTracked = Object.values(trackingRef.current).some(Boolean)
       if (hasTracked && ts - lastDetectRef.current > DETECT_INTERVAL) {
         lastDetectRef.current = ts
         detectAndUpdateBlurs() // intentionally NOT awaited
+      }
+
+      // Fire pose detection in background
+      if (poseEnabled && !poseDetecting.current && ts - (loop._lastPose||0) > POSE_INTERVAL) {
+        loop._lastPose = ts
+        runPoseDetection()
       }
 
       rafRef.current = requestAnimationFrame(loop)
@@ -469,6 +489,54 @@ export default function App() {
     if (updated) {
       shapesRef.current = newShapes
       renderShapes(newShapes, null, null, trackingRef.current)
+    }
+  }
+
+  // ── Pose detection ───────────────────────────────────────────────────────────
+  async function enablePose() {
+    if (poseStatus === 'loading') return
+    setPoseStatus('loading')
+    try {
+      await loadPose((results) => {
+        poseLandmarks.current = results.poseLandmarks || null
+        poseDetecting.current = false
+        renderPoseOverlay()
+      })
+      setPoseStatus('ready')
+      setPoseEnabled(true)
+    } catch(e) {
+      console.error('[SparkQB] Pose load error:', e)
+      setPoseStatus('error')
+    }
+  }
+
+  function renderPoseOverlay() {
+    const c = poseCanvasRef.current; if (!c) return
+    const ctx = c.getContext('2d')
+    ctx.clearRect(0, 0, c.width, c.height)
+    if (!poseLandmarks.current) return
+    drawPoseOverlay(ctx, poseLandmarks.current, enabledAngles, c.width, c.height)
+  }
+
+  async function runPoseDetection() {
+    const pose = (await import('./pose.js')).getPoseInstance()
+    if (!pose || !vidRef.current || vidRef.current.paused && poseLandmarks.current) return
+    poseDetecting.current = true
+    try {
+      await pose.send({ image: vidRef.current })
+    } catch(e) {
+      poseDetecting.current = false
+    }
+  }
+
+  function togglePose() {
+    if (!poseEnabled) {
+      enablePose()
+    } else {
+      setPoseEnabled(false)
+      poseLandmarks.current = null
+      const c = poseCanvasRef.current
+      if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height)
     }
   }
 
@@ -755,6 +823,20 @@ export default function App() {
           <button className="tb-btn red" onClick={() => { push([]); setSelId(null); trackingRef.current = {}; setTracking({}) }} title="Clear all">
             <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={18}/>
           </button>
+          <button className={`pose-btn ${poseEnabled ? 'active' : ''}`}
+            onClick={togglePose} title="Toggle pose detection"
+            disabled={poseStatus === 'loading'}>
+            {poseStatus === 'loading'
+              ? <><span className="spin">⟳</span> POSE…</>
+              : <><I d="M12 2a5 5 0 015 5 5 5 0 01-5 5 5 5 0 01-5-5 5 5 0 015-5M5 20a7 7 0 0114 0" size={16}/> POSE</>
+            }
+          </button>
+          {poseEnabled && (
+            <button className={`pose-btn ${showAnglePanel ? 'active' : ''}`}
+              onClick={() => setShowAnglePanel(v => !v)} title="Configure angles">
+              <I d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" size={16}/>
+            </button>
+          )}
           <button className="load-btn" onClick={() => fileRef.current?.click()}>
             <I d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.889L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" size={16}/>
             LOAD FILM
@@ -779,6 +861,7 @@ export default function App() {
         }}>
         <canvas ref={bgRef} className="layer layer-bg"/>
         <canvas ref={drRef} className="layer layer-dr"/>
+        <canvas ref={poseCanvasRef} className="layer layer-pose"/>
         <canvas ref={ovRef} className="layer layer-ov"
           style={{ cursor: zoom > 1 && tool==='select' ? 'grab' : tool==='select'?'grab':tool==='eraser'?'cell':'crosshair' }}
           onMouseDown={e => {
@@ -976,6 +1059,29 @@ export default function App() {
 
       <video ref={vidRef} style={{display:'none'}} playsInline loop muted onEnded={() => setPlaying(false)}/>
       <input ref={fileRef} type="file" accept="video/*" style={{display:'none'}} onChange={onFileLoad}/>
+
+      {/* Angle toggle panel */}
+      {showAnglePanel && (
+        <div className="angle-panel" onClick={e => e.stopPropagation()}>
+          <div className="angle-panel-head">
+            JOINT ANGLES
+            <button onClick={() => setShowAnglePanel(false)}>✕</button>
+          </div>
+          <div className="angle-grid">
+            {ANGLE_JOINTS.filter(j => !j.name.includes('Wrist') && !j.name.includes('Ankle')).map(j => (
+              <button key={j.name}
+                className={`angle-chip ${enabledAngles[j.name] ? 'on' : 'off'}`}
+                onClick={() => setEnabledAngles(prev => ({ ...prev, [j.name]: !prev[j.name] }))}>
+                {j.name}
+              </button>
+            ))}
+          </div>
+          <div className="angle-panel-actions">
+            <button onClick={() => setEnabledAngles(Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true])))}>All On</button>
+            <button onClick={() => setEnabledAngles(Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, false])))}>All Off</button>
+          </div>
+        </div>
+      )}
 
       {/* Player label modal */}
       {lblModal && (
