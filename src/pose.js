@@ -213,13 +213,20 @@ function initPose(onResults, resolve, reject) {
       minTrackingConfidence: 0.5,
     })
 
-    pose.onResults(onResults)
+    pose.onResults((results) => {
+      console.log('[SparkQB] Pose results:', results.poseLandmarks ? `${results.poseLandmarks.length} landmarks` : 'no landmarks')
+      onResults(results)
+    })
 
     pose.initialize().then(() => {
+      console.log('[SparkQB] Pose initialized OK')
       poseInstance = pose
       poseReady    = true
       resolve(pose)
-    }).catch(reject)
+    }).catch(e => {
+      console.error('[SparkQB] Pose initialize failed:', e)
+      reject(e)
+    })
   } catch(e) {
     reject(e)
   }
