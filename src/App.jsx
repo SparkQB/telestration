@@ -63,6 +63,7 @@ const TOOLS = [
   { id:'rect',   label:'Box',   icon:'M3 3h18v18H3z' },
   { id:'text',   label:'Text',  icon:'M4 7V4h16v3M9 20h6M12 4v16' },
   { id:'blur',   label:'Blur',  icon:null },  // text button, no icon
+  { id:'gonio',  label:'Angle', icon:'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM12 12l-4-4M12 12l4-4M12 12v5' },
   { id:'select', label:'Move',  icon:'M5 3l14 9-7 1-4 7z' },
   { id:'eraser', label:'Erase', icon:'M20 20H7L3 16l10-10 7 7-1.5 1.5M6.5 17.5l10-10' },
 ]
@@ -181,6 +182,67 @@ function renderShape(ctx, s, selected = false) {
       ctx.moveTo(s.x+r, s.y-r); ctx.lineTo(s.x-r, s.y+r)
       ctx.stroke(); break
     }
+
+    case 'gonio': {
+      // Need at least 2 points to draw anything
+      if (!s.pts || s.pts.length < 2) break
+      const CYAN = '#00E5FF'
+      ctx.strokeStyle = CYAN; ctx.fillStyle = CYAN; ctx.lineWidth = 2
+      ctx.globalAlpha = 1
+
+      const [pA, pV, pB] = s.pts  // A = first arm, V = vertex, B = second arm
+
+      // Draw lines from vertex to each point
+      if (pV) {
+        ctx.beginPath(); ctx.moveTo(pA.x, pA.y); ctx.lineTo(pV.x, pV.y); ctx.stroke()
+        if (pB) {
+          ctx.beginPath(); ctx.moveTo(pV.x, pV.y); ctx.lineTo(pB.x, pB.y); ctx.stroke()
+        }
+      }
+
+      // Draw angle arc and label at vertex
+      if (pV && pB) {
+        const angleA = Math.atan2(pA.y - pV.y, pA.x - pV.x)
+        const angleB = Math.atan2(pB.y - pV.y, pB.x - pV.x)
+        const radius = Math.min(
+          Math.hypot(pA.x-pV.x, pA.y-pV.y),
+          Math.hypot(pB.x-pV.x, pB.y-pV.y)
+        ) * 0.4
+
+        ctx.beginPath()
+        ctx.arc(pV.x, pV.y, radius, Math.min(angleA,angleB), Math.max(angleA,angleB))
+        ctx.stroke()
+
+        // Calculate angle
+        const vA = { x: pA.x-pV.x, y: pA.y-pV.y }
+        const vB = { x: pB.x-pV.x, y: pB.y-pV.y }
+        const dot = vA.x*vB.x + vA.y*vB.y
+        const magA = Math.hypot(vA.x, vA.y), magB = Math.hypot(vB.x, vB.y)
+        const angle = Math.round(Math.acos(Math.max(-1,Math.min(1,dot/(magA*magB)))) * 180/Math.PI)
+
+        // Label
+        const midAngle = (angleA + angleB) / 2
+        const lx = pV.x + Math.cos(midAngle) * (radius + 16)
+        const ly = pV.y + Math.sin(midAngle) * (radius + 16)
+        ctx.font = `bold 14px 'Roboto Mono', monospace`
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        const tw = ctx.measureText(`${angle}°`).width
+        ctx.fillStyle = 'rgba(0,0,0,0.65)'
+        ctx.beginPath(); ctx.roundRect(lx-tw/2-4, ly-10, tw+8, 20, 4); ctx.fill()
+        ctx.fillStyle = CYAN
+        ctx.fillText(`${angle}°`, lx, ly)
+      }
+
+      // Draw draggable control points
+      s.pts.forEach((p, i) => {
+        const r2 = 6
+        ctx.beginPath(); ctx.arc(p.x, p.y, r2, 0, Math.PI*2)
+        ctx.fillStyle = i === 1 ? CYAN : 'rgba(0,229,255,0.4)'  // vertex brighter
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke()
+      })
+      break
+    }
   }
 
   if (selected) {
@@ -239,14 +301,26 @@ function bounds(s) {
     case 'rect': case 'blur': return { x:Math.min(s.x,s.x+s.w), y:Math.min(s.y,s.y+s.h), w:Math.abs(s.w), h:Math.abs(s.h) }
     case 'arrow': return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) }
     case 'text':  return { x:s.x, y:s.y-(s.fs||28), w:120, h:(s.fs||28)+8 }
+    case 'gonio': {
+      if (!s.pts?.length) return null
+      const xs = s.pts.map(p=>p.x), ys = s.pts.map(p=>p.y)
+      return { x:Math.min(...xs), y:Math.min(...ys), w:Math.max(...xs)-Math.min(...xs), h:Math.max(...ys)-Math.min(...ys) }
+    }
     default: return null
   }
 }
 
 function hitTest(s, x, y) {
+  if (s.type === 'gonio') return (s.pts||[]).some(p => Math.hypot(p.x-x, p.y-y) < 18)
   const b = bounds(s)
   if (!b) return (s.pts||[]).some(p => Math.hypot(p.x-x,p.y-y) < 16)
   return x >= b.x-8 && x <= b.x+b.w+8 && y >= b.y-8 && y <= b.y+b.h+8
+}
+
+// Find which goniometer point was hit (for per-point dragging)
+function gonioHitPoint(s, x, y) {
+  if (s.type !== 'gonio') return -1
+  return (s.pts||[]).findIndex(p => Math.hypot(p.x-x, p.y-y) < 18)
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -324,6 +398,10 @@ export default function App() {
     zoomRef.current = 1; panRef.current = { x: 0, y: 0 }
     setZoom(1); setPan({ x: 0, y: 0 })
   }
+
+  // ── Goniometer state ─────────────────────────────────────────────────────────
+  const gonioRef = useRef(null)  // in-progress goniometer { id, pts[] }
+  const gonioDragPoint = useRef(-1) // which point is being dragged in select mode
 
   // ── Release timer state ───────────────────────────────────────────────────────
   const [throwStart,   setThrowStart]   = useState(null)   // timestamp in seconds
@@ -590,7 +668,17 @@ export default function App() {
     if (tool === 'select') {
       const hit = [...shapes].reverse().find(s => hitTest(s, pos.x, pos.y))
       setSelId(hit?.id || null)
-      if (hit) dragSt.current = { id: hit.id, sx: pos.x, sy: pos.y, orig: JSON.parse(JSON.stringify(hit)) }
+      if (hit) {
+        // Check if clicking a goniometer control point
+        const ptIdx = gonioHitPoint(hit, pos.x, pos.y)
+        if (ptIdx >= 0) {
+          gonioDragPoint.current = ptIdx
+          dragSt.current = { id: hit.id, sx: pos.x, sy: pos.y, orig: JSON.parse(JSON.stringify(hit)), gonioPt: ptIdx }
+        } else {
+          gonioDragPoint.current = -1
+          dragSt.current = { id: hit.id, sx: pos.x, sy: pos.y, orig: JSON.parse(JSON.stringify(hit)) }
+        }
+      }
       return
     }
     if (tool === 'eraser') {
@@ -607,6 +695,28 @@ export default function App() {
     if (tool === 'player-o') { setLblModal({ ...pos }); setLblVal(''); return }
     if (tool === 'player-x') { push([...shapes, { id: uid(), type: 'player-x', x: pos.x, y: pos.y, r: 20, ...ts }]); return }
 
+    // Goniometer — tap to place points one at a time
+    if (tool === 'gonio') {
+      if (!gonioRef.current) {
+        // First tap — create with first point
+        gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
+      } else {
+        gonioRef.current.pts.push(pos)
+        if (gonioRef.current.pts.length === 3) {
+          // Third tap — commit
+          push([...shapes, gonioRef.current])
+          gonioRef.current = null
+        }
+      }
+      // Show preview
+      const oc = ovRef.current; if (oc) {
+        const octx = oc.getContext('2d')
+        octx.clearRect(0, 0, oc.width, oc.height)
+        if (gonioRef.current) renderShape(octx, gonioRef.current, false)
+      }
+      return
+    }
+
     drawing.current = true
     if (tool==='pen'||tool==='route') stroke.current = { id:uid(), type:tool, pts:[pos], ...ts }
     else if (tool==='arrow')  stroke.current = { id:uid(), type:'arrow',  x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
@@ -622,11 +732,27 @@ export default function App() {
     if (dragSt.current) {
       const dx = pos.x - dragSt.current.sx, dy = pos.y - dragSt.current.sy
       const o = dragSt.current.orig; let m
-      if (o.type==='pen'||o.type==='route') m = { ...o, pts: o.pts.map(p=>({x:p.x+dx,y:p.y+dy})) }
+      if (o.type === 'gonio' && dragSt.current.gonioPt >= 0) {
+        // Drag individual goniometer point
+        const newPts = o.pts.map((p, i) =>
+          i === dragSt.current.gonioPt ? { x: pos.x, y: pos.y } : p
+        )
+        m = { ...o, pts: newPts }
+      } else if (o.type==='pen'||o.type==='route') m = { ...o, pts: o.pts.map(p=>({x:p.x+dx,y:p.y+dy})) }
       else if (o.type==='arrow')  m = { ...o, x1:o.x1+dx, y1:o.y1+dy, x2:o.x2+dx, y2:o.y2+dy }
       else if (o.type==='circle') m = { ...o, cx:o.cx+dx, cy:o.cy+dy }
       else m = { ...o, x:o.x+dx, y:o.y+dy }
       if (m) renderShapes(shapes.map(s=>s.id===m.id?m:s), null, m.id, trackingRef.current)
+      return
+    }
+
+    // Goniometer in-progress preview — show last placed point to cursor
+    if (tool === 'gonio' && gonioRef.current) {
+      const oc = ovRef.current; if (!oc) return
+      const octx = oc.getContext('2d')
+      octx.clearRect(0, 0, oc.width, oc.height)
+      const preview = { ...gonioRef.current, pts: [...gonioRef.current.pts, pos] }
+      renderShape(octx, preview, false)
       return
     }
 
@@ -653,12 +779,17 @@ export default function App() {
       const pos = { x:(src.clientX-r.left)*(oc.width/r.width), y:(src.clientY-r.top)*(oc.height/r.height) }
       const dx = pos.x-dragSt.current.sx, dy = pos.y-dragSt.current.sy
       const o = dragSt.current.orig; let m
-      if (o.type==='pen'||o.type==='route') m = { ...o, pts: o.pts.map(p=>({x:p.x+dx,y:p.y+dy})) }
+      if (o.type === 'gonio' && dragSt.current.gonioPt >= 0) {
+        const newPts = o.pts.map((p, i) =>
+          i === dragSt.current.gonioPt ? { x: pos.x, y: pos.y } : p
+        )
+        m = { ...o, pts: newPts }
+      } else if (o.type==='pen'||o.type==='route') m = { ...o, pts: o.pts.map(p=>({x:p.x+dx,y:p.y+dy})) }
       else if (o.type==='arrow')  m = { ...o, x1:o.x1+dx,y1:o.y1+dy,x2:o.x2+dx,y2:o.y2+dy }
       else if (o.type==='circle') m = { ...o, cx:o.cx+dx,cy:o.cy+dy }
       else m = { ...o, x:o.x+dx, y:o.y+dy }
       if (m) push(shapes.map(s=>s.id===m.id?m:s))
-      dragSt.current = null; return
+      dragSt.current = null; gonioDragPoint.current = -1; return
     }
 
     if (!drawing.current || !stroke.current) return
@@ -845,12 +976,7 @@ export default function App() {
               : <><I d="M12 2a5 5 0 015 5 5 5 0 01-5 5 5 5 0 01-5-5 5 5 0 015-5M5 20a7 7 0 0114 0" size={16}/> JOINTS</>
             }
           </button>
-          {poseEnabled && (
-            <button className={`pose-btn ${showAnglePanel ? 'active' : ''}`}
-              onClick={() => setShowAnglePanel(v => !v)} title="Configure angles">
-              <I d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" size={16}/>
-            </button>
-          )}
+
           <button className="load-btn" onClick={() => fileRef.current?.click()}>
             <I d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.889L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" size={16}/>
             LOAD FILM
@@ -1087,69 +1213,55 @@ export default function App() {
       <video ref={vidRef} style={{display:'none'}} playsInline loop muted onEnded={() => setPlaying(false)}/>
       <input ref={fileRef} type="file" accept="video/*" style={{display:'none'}} onChange={onFileLoad}/>
 
-      {/* Floating joint angle table */}
-      {poseEnabled && poseLandmarks.current && (() => {
+      {/* Floating joint angle table — draggable, inline toggles */}
+      {poseEnabled && (() => {
         const defaultX = window.innerWidth - 220
-        const defaultY = window.innerHeight - 280
+        const defaultY = window.innerHeight - 320
         const tx = tablePos.x ?? defaultX
         const ty = tablePos.y ?? defaultY
         return (
           <div className="joint-table"
             style={{ left: tx, top: ty }}
             onMouseDown={e => {
+              if (e.target.closest('.jt-toggle')) return
               e.stopPropagation()
-              const startX = e.clientX - tx
-              const startY = e.clientY - ty
+              const startX = e.clientX - tx, startY = e.clientY - ty
               tableDragRef.current = { startX, startY }
-              const onMove = ev => {
-                setTablePos({ x: ev.clientX - tableDragRef.current.startX, y: ev.clientY - tableDragRef.current.startY })
-              }
-              const onUp = () => {
-                tableDragRef.current = null
-                window.removeEventListener('mousemove', onMove)
-                window.removeEventListener('mouseup', onUp)
-              }
-              window.addEventListener('mousemove', onMove)
-              window.addEventListener('mouseup', onUp)
+              const onMv = ev => setTablePos({ x: ev.clientX - tableDragRef.current.startX, y: ev.clientY - tableDragRef.current.startY })
+              const onUp = () => { tableDragRef.current = null; window.removeEventListener('mousemove', onMv); window.removeEventListener('mouseup', onUp) }
+              window.addEventListener('mousemove', onMv); window.addEventListener('mouseup', onUp)
             }}
             onTouchStart={e => {
+              if (e.target.closest('.jt-toggle')) return
               e.stopPropagation()
               const t0 = e.touches[0]
-              const startX = t0.clientX - tx
-              const startY = t0.clientY - ty
+              const startX = t0.clientX - tx, startY = t0.clientY - ty
               tableDragRef.current = { startX, startY }
-              const onMove = ev => {
-                const t1 = ev.touches[0]
-                setTablePos({ x: t1.clientX - tableDragRef.current.startX, y: t1.clientY - tableDragRef.current.startY })
-              }
-              const onEnd = () => {
-                tableDragRef.current = null
-                window.removeEventListener('touchmove', onMove)
-                window.removeEventListener('touchend', onEnd)
-              }
-              window.addEventListener('touchmove', onMove)
-              window.addEventListener('touchend', onEnd)
+              const onMv = ev => { const t1=ev.touches[0]; setTablePos({ x: t1.clientX-tableDragRef.current.startX, y: t1.clientY-tableDragRef.current.startY }) }
+              const onEnd = () => { tableDragRef.current = null; window.removeEventListener('touchmove', onMv); window.removeEventListener('touchend', onEnd) }
+              window.addEventListener('touchmove', onMv); window.addEventListener('touchend', onEnd)
             }}
           >
-            <div className="joint-table-head">
-              <span>JOINT ANGLES</span>
-              <button onClick={() => setShowAnglePanel(v => !v)}>⚙</button>
-            </div>
+            <div className="joint-table-head">JOINT ANGLES</div>
             <table className="joint-table-body">
               <tbody>
-                {ANGLE_JOINTS.filter(j => enabledAngles[j.name]).map(j => {
-                  const val = calcJointAngle(j, poseWorldLandmarks.current)
-                  return val !== null ? (
-                    <tr key={j.name}>
+                {ANGLE_JOINTS.map(j => {
+                  const val = poseLandmarks.current ? calcJointAngle(j, poseWorldLandmarks.current) : null
+                  const on = enabledAngles[j.name]
+                  return (
+                    <tr key={j.name} className={on ? '' : 'jt-off'}>
                       <td className="jt-name">{j.name}</td>
-                      <td className="jt-val">{j.type === 'shoulder' && val > 0 ? `+${val}°` : `${val}°`}</td>
+                      <td className="jt-val">{on && val !== null ? `${val}°` : '–'}</td>
+                      <td className="jt-toggle" onClick={() => setEnabledAngles(prev => ({ ...prev, [j.name]: !prev[j.name] }))}>
+                        <span className={`jt-dot ${on ? 'on' : 'off'}`}/>
+                      </td>
                     </tr>
-                  ) : null
+                  )
                 })}
                 {throwStart !== null && ballRelease !== null && (
                   <tr className="jt-release">
                     <td className="jt-name">Release</td>
-                    <td className="jt-val jt-release-val">{Math.round(Math.abs(ballRelease - throwStart) * 1000)}ms</td>
+                    <td className="jt-val jt-release-val" colSpan={2}>{Math.round(Math.abs(ballRelease - throwStart) * 1000)}ms</td>
                   </tr>
                 )}
               </tbody>
@@ -1158,28 +1270,7 @@ export default function App() {
         )
       })()}
 
-      {/* Angle toggle panel */}
-      {showAnglePanel && (
-        <div className="angle-panel" onClick={e => e.stopPropagation()}>
-          <div className="angle-panel-head">
-            JOINT ANGLES
-            <button onClick={() => setShowAnglePanel(false)}>✕</button>
-          </div>
-          <div className="angle-grid">
-            {ANGLE_JOINTS.filter(j => !j.name.includes('Wrist') && !j.name.includes('Ankle')).map(j => (
-              <button key={j.name}
-                className={`angle-chip ${enabledAngles[j.name] ? 'on' : 'off'}`}
-                onClick={() => setEnabledAngles(prev => ({ ...prev, [j.name]: !prev[j.name] }))}>
-                {j.name}
-              </button>
-            ))}
-          </div>
-          <div className="angle-panel-actions">
-            <button onClick={() => setEnabledAngles(Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true])))}>All On</button>
-            <button onClick={() => setEnabledAngles(Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, false])))}>All Off</button>
-          </div>
-        </div>
-      )}
+
 
       {/* Player label modal */}
       {lblModal && (

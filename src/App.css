@@ -30,7 +30,7 @@
   display: block;
 }
 .sl-logo-mark {
-  height: 32px;
+  height: 40px;
   display: none;
 }
 @media (max-width: 600px) {
@@ -748,3 +748,9 @@
 .jt-release td { border-top: 1px solid rgba(178,255,0,0.15); padding-top: 5px; margin-top: 3px; }
 .jt-release .jt-name { color: var(--green); }
 .jt-release-val { color: var(--green) !important; font-size: 13px !important; }
+.jt-off .jt-name, .jt-off .jt-val { opacity: 0.35; }
+.jt-toggle { cursor: pointer; padding: 3px 2px 3px 6px; }
+.jt-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid #00E5FF; vertical-align: middle; }
+.jt-dot.on  { background: #00E5FF; }
+.jt-dot.off { background: transparent; }
+.joint-table-head { cursor: grab; }
