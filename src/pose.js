@@ -310,12 +310,13 @@ function initPose(onResults, resolve, reject) {
     })
 
     pose.setOptions({
-      modelComplexity: 1,        // 0=lite, 1=full, 2=heavy
+      modelComplexity: 1,
       smoothLandmarks: true,
       enableSegmentation: false,
       smoothSegmentation: false,
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5,
+      enableWorldLandmarks: true,  // required for 3D world coordinates
     })
 
     pose.onResults((results) => {
