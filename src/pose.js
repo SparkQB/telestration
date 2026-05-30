@@ -131,13 +131,16 @@ function calcShoulderRotation(wl, side) {
 }
 
 export function calcJointAngle(joint, worldLandmarks) {
-  if (!worldLandmarks) return null
+  if (!worldLandmarks) { console.log('[SparkQB] calcJointAngle: no worldLandmarks'); return null }
+  let result
   switch(joint.type) {
-    case 'elbow':    return calcElbow(worldLandmarks, joint.side)
-    case 'knee':     return calcKnee(worldLandmarks, joint.side)
-    case 'shoulder': return calcShoulderRotation(worldLandmarks, joint.side)
-    default: return null
+    case 'elbow':    result = calcElbow(worldLandmarks, joint.side); break
+    case 'knee':     result = calcKnee(worldLandmarks, joint.side); break
+    case 'shoulder': result = calcShoulderRotation(worldLandmarks, joint.side); break
+    default: result = null
   }
+  console.log(`[SparkQB] ${joint.name}: ${result}`)
+  return result
 }
 
 // ── Draw angle label + arc ────────────────────────────────────────────────────
