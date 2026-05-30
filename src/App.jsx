@@ -612,37 +612,12 @@ export default function App() {
     drawPoseOverlay(ctx, poseLandmarks.current, poseWorldLandmarks.current, anglesEnabled, c.width, c.height)
   }
 
-  const poseLastTime  = useRef(-1)   // last video time we detected on
-  const poseScrubbing = useRef(false) // true while resetting after a scrub
-
   async function runPoseDetection() {
     const { getPoseInstance } = await import('./pose.js')
     const pose = getPoseInstance()
     if (!pose) return
     if (!vidRef.current) return
-    if (poseScrubbing.current) return  // wait for reset to complete
-
-    const t      = vidRef.current.currentTime
-    const paused = vidRef.current.paused
-
-    // Detect once per unique timestamp when paused
-    if (paused && poseLastTime.current === t) return
-
-    // Scrub detected — timestamp jumped non-sequentially
-    const expectedMax = poseLastTime.current + 0.5  // allow up to 0.5s forward naturally
-    const isScrubbedBack  = t < poseLastTime.current - 0.1
-    const isScrubbedFwd   = paused && t > expectedMax
-    if ((isScrubbedBack || isScrubbedFwd) && poseLastTime.current >= 0) {
-      // Reset MediaPipe so it has no memory of previous position
-      poseScrubbing.current = true
-      try {
-        await pose.reset()
-      } catch(e) { /* reset may not exist on all versions */ }
-      poseScrubbing.current = false
-    }
-
     poseDetecting.current = true
-    poseLastTime.current = t
     try {
       await pose.send({ image: vidRef.current })
     } catch(e) {
