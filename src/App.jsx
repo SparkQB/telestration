@@ -305,6 +305,7 @@ export default function App() {
   const [enabledAngles, setEnabledAngles] = useState(
     Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true]))
   )
+  const enabledAnglesRef = useRef(Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true])))
   const poseCanvasRef  = useRef(null)
   const poseLandmarks  = useRef(null)
   const poseDetecting  = useRef(false)
@@ -400,6 +401,7 @@ export default function App() {
   useEffect(() => { renderShapes(shapes, null, selId) }, [shapes, selId, renderShapes])
   useEffect(() => { renderPoseOverlay() }, [enabledAngles])
   useEffect(() => { poseEnabledRef.current = poseEnabled }, [poseEnabled])
+  useEffect(() => { enabledAnglesRef.current = enabledAngles; renderPoseOverlay() }, [enabledAngles])
 
   // ── Video frame loop ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -521,7 +523,7 @@ export default function App() {
     const ctx = c.getContext('2d')
     ctx.clearRect(0, 0, c.width, c.height)
     if (!poseLandmarks.current) return
-    drawPoseOverlay(ctx, poseLandmarks.current, enabledAngles, c.width, c.height)
+    drawPoseOverlay(ctx, poseLandmarks.current, enabledAnglesRef.current, c.width, c.height)
   }
 
   async function runPoseDetection() {
@@ -836,7 +838,7 @@ export default function App() {
             disabled={poseStatus === 'loading'}>
             {poseStatus === 'loading'
               ? <><span className="spin">⟳</span> POSE…</>
-              : <><I d="M12 2a5 5 0 015 5 5 5 0 01-5 5 5 5 0 01-5-5 5 5 0 015-5M5 20a7 7 0 0114 0" size={16}/> POSE</>
+              : <><I d="M12 2a5 5 0 015 5 5 5 0 01-5 5 5 5 0 01-5-5 5 5 0 015-5M5 20a7 7 0 0114 0" size={16}/> JOINTS</>
             }
           </button>
           {poseEnabled && (
