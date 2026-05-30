@@ -482,7 +482,7 @@
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 480px) {
   .topbar { padding: 0 6px; gap: 6px; }
-  .sl-logo { height: 16px; }
+  .sl-logo-mark { height: 44px; }
   .mode-tabs button { padding: 3px 8px; font-size: 10px; }
   .tb-btn { width: 30px; height: 30px; }
   .pal-btn { width: 34px; height: 34px; }
@@ -754,3 +754,10 @@
 .jt-dot.on  { background: #00E5FF; }
 .jt-dot.off { background: transparent; }
 .joint-table-head { cursor: grab; }
+
+/* ── Master angle toggle ────────────────────────────────────────────────── */
+.jt-master-toggle {
+  background: none; border: none; cursor: pointer; padding: 2px 4px;
+  display: flex; align-items: center;
+}
+.joint-table-head { display: flex; justify-content: space-between; align-items: center; cursor: grab; }
