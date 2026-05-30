@@ -21,10 +21,21 @@
 }
 
 .sl-logo {
-  height: 28px;
   width: auto;
   display: block;
   flex-shrink: 0;
+}
+.sl-logo-full {
+  height: 28px;
+  display: block;
+}
+.sl-logo-mark {
+  height: 32px;
+  display: none;
+}
+@media (max-width: 600px) {
+  .sl-logo-full { display: none; }
+  .sl-logo-mark { display: block; }
 }
 
 .mode-tabs {

@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 import sparkqbLogo from './assets/sparkqb-logo.svg'
+import sparkqbMark from './assets/sparkqb-logomark.svg'
 import { loadPose, drawPoseOverlay, ANGLE_JOINTS } from './pose.js'
 import './App.css'
 
@@ -306,9 +307,10 @@ export default function App() {
     Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true]))
   )
   const enabledAnglesRef = useRef(Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true])))
-  const poseCanvasRef  = useRef(null)
-  const poseLandmarks  = useRef(null)
-  const poseDetecting  = useRef(false)
+  const poseCanvasRef       = useRef(null)
+  const poseLandmarks       = useRef(null)
+  const poseWorldLandmarks  = useRef(null)
+  const poseDetecting       = useRef(false)
   const POSE_INTERVAL  = 60  // ms between pose detections
 
   // ── Zoom / pan state ─────────────────────────────────────────────────────────
@@ -523,7 +525,7 @@ export default function App() {
     const ctx = c.getContext('2d')
     ctx.clearRect(0, 0, c.width, c.height)
     if (!poseLandmarks.current) return
-    drawPoseOverlay(ctx, poseLandmarks.current, enabledAnglesRef.current, c.width, c.height)
+    drawPoseOverlay(ctx, poseLandmarks.current, poseWorldLandmarks.current, enabledAnglesRef.current, c.width, c.height)
   }
 
   async function runPoseDetection() {
@@ -813,7 +815,8 @@ export default function App() {
 
       {/* Top bar */}
       <header className="topbar">
-        <img src={sparkqbLogo} alt="SparkQB" className="sl-logo" />
+        <img src={sparkqbLogo} alt="SparkQB" className="sl-logo sl-logo-full" />
+        <img src={sparkqbMark} alt="SparkQB" className="sl-logo sl-logo-mark" />
         <div className="topbar-actions">
           <button className="tb-btn" disabled={!canUndo} onClick={undo} title="Undo">
             <I d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3" size={18}/>
@@ -821,12 +824,8 @@ export default function App() {
           <button className="tb-btn" disabled={!canRedo} onClick={redo} title="Redo">
             <I d="M15 14l5-5-5-5M19 9H8a5 5 0 000 10h3" size={18}/>
           </button>
-          <button className="tb-btn green" onClick={() => setAnimating(true)} title="Animate routes">
-            <I d="M5 3l14 9-14 9V3z" size={18} fill="currentColor" sw={0}/>
-          </button>
-          <button className="tb-btn" onClick={() => setShowPlays(true)} title="Playbook">
-            <I d="M4 19.5A2.5 2.5 0 016.5 17H20M4 19.5A2.5 2.5 0 016.5 22H20V2H6.5A2.5 2.5 0 004 4.5v15z" size={18}/>
-          </button>
+
+
           <button className="tb-btn" onClick={exportImg} title="Export PNG">
             <I d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" size={18}/>
           </button>
