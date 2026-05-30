@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 import sparkqbLogo from './assets/sparkqb-logo.svg'
 import sparkqbMark from './assets/sparkqb-logomark.svg'
-import { loadPose, drawPoseOverlay, ANGLE_JOINTS } from './pose.js'
+import { loadPose, drawPoseOverlay, ANGLE_JOINTS, calcJointAngle } from './pose.js'
 import './App.css'
 
 // ── Face detection — face-api.js (Safari compatible, self-hosted) ────────────
@@ -56,17 +56,15 @@ const I = ({ d, size = 20, sw = 1.8, fill = 'none' }) => (
 
 // ── Tools ─────────────────────────────────────────────────────────────────────
 const TOOLS = [
-  { id:'pen',      label:'Pen',    icon:'M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z' },
-  { id:'arrow',    label:'Arrow',  icon:'M5 12h14M12 5l7 7-7 7' },
-  { id:'route',    label:'Route',  icon:'M3 17c3-3 6-5 9-5s6 2 9-2' },
-  { id:'circle',   label:'Circle', icon:'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z' },
-  { id:'rect',     label:'Box',    icon:'M3 3h18v18H3z' },
-  { id:'text',     label:'Text',   icon:'M4 7V4h16v3M9 20h6M12 4v16' },
-  { id:'player-o', label:'Off',    icon:'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z' },
-  { id:'player-x', label:'Def',    icon:'M18 6L6 18M6 6l12 12' },
-  { id:'blur',     label:'Blur',   icon:'M3 12a9 9 0 1018 0 9 9 0 00-18 0zM3 12h3M18 12h3M12 3v3M12 18v3' },
-  { id:'select',   label:'Move',   icon:'M5 3l14 9-7 1-4 7z' },
-  { id:'eraser',   label:'Erase',  icon:'M20 20H7L3 16l10-10 7 7-1.5 1.5M6.5 17.5l10-10' },
+  { id:'pen',    label:'Pen',   icon:'M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z' },
+  { id:'arrow',  label:'Arrow', icon:'M5 12h14M12 5l7 7-7 7' },
+  { id:'route',  label:'Route', icon:'M3 17c3-3 6-5 9-5s6 2 9-2' },
+  { id:'circle', label:'Circle',icon:'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z' },
+  { id:'rect',   label:'Box',   icon:'M3 3h18v18H3z' },
+  { id:'text',   label:'Text',  icon:'M4 7V4h16v3M9 20h6M12 4v16' },
+  { id:'blur',   label:'Blur',  icon:null },  // text button, no icon
+  { id:'select', label:'Move',  icon:'M5 3l14 9-7 1-4 7z' },
+  { id:'eraser', label:'Erase', icon:'M20 20H7L3 16l10-10 7 7-1.5 1.5M6.5 17.5l10-10' },
 ]
 
 const PALETTE = ['#B2FF00','#004FFF','#FF0400','#F8F8F8','#FFD600','#FF6B00','#00E5FF','#101214']
@@ -326,6 +324,12 @@ export default function App() {
     zoomRef.current = 1; panRef.current = { x: 0, y: 0 }
     setZoom(1); setPan({ x: 0, y: 0 })
   }
+
+  // ── Release timer state ───────────────────────────────────────────────────────
+  const [throwStart,   setThrowStart]   = useState(null)   // timestamp in seconds
+  const [ballRelease,  setBallRelease]  = useState(null)   // timestamp in seconds
+  const [tablePos,     setTablePos]     = useState({ x: null, y: null }) // drag position
+  const tableDragRef = useRef(null)
 
   function clampPan(px, py, z) {
     const cw = csz.current.w, ch = csz.current.h
@@ -950,9 +954,9 @@ export default function App() {
           onClick={e => e.stopPropagation()}>
           {TOOLS.map(t => (
             <div key={t.id} className="pal-item">
-              <button className={`pal-btn ${tool===t.id?'active':''}`}
+              <button className={`pal-btn ${tool===t.id?'active':''} ${t.id==='blur'?'pal-btn-text':''}`}
                 title={t.label} onClick={() => handleToolClick(t.id)}>
-                <I d={t.icon} size={20}/>
+                {t.icon ? <I d={t.icon} size={20}/> : <span className="pal-text-label">{t.label}</span>}
               </button>
               {popover === t.id && tool === t.id && (
                 <div className={`tool-popover ${isPortrait ? 'pop-left' : 'pop-top'}`}
@@ -1064,11 +1068,95 @@ export default function App() {
           <button className="speed-btn" onClick={cycleSpeed}>{SPEEDS[speedIdx]}×</button>
           <span className="tc">{fmt(currentT)}</span>
           {videoMeta.fps && <span className="fps-badge">{Math.round(videoMeta.fps)}fps</span>}
+          <div className="release-btns">
+            <button className={`release-mark-btn ${throwStart !== null ? 'marked' : ''}`}
+              onClick={() => setThrowStart(currentT)} title="Mark throw start">
+              {throwStart !== null ? `S: ${fmt(throwStart)}` : 'MARK START'}
+            </button>
+            <button className={`release-mark-btn release ${ballRelease !== null ? 'marked' : ''}`}
+              onClick={() => setBallRelease(currentT)} title="Mark ball release">
+              {ballRelease !== null ? `R: ${fmt(ballRelease)}` : 'MARK RELEASE'}
+            </button>
+            {(throwStart !== null || ballRelease !== null) && (
+              <button className="release-clear-btn" onClick={() => { setThrowStart(null); setBallRelease(null) }} title="Clear markers">✕</button>
+            )}
+          </div>
         </div>
       )}
 
       <video ref={vidRef} style={{display:'none'}} playsInline loop muted onEnded={() => setPlaying(false)}/>
       <input ref={fileRef} type="file" accept="video/*" style={{display:'none'}} onChange={onFileLoad}/>
+
+      {/* Floating joint angle table */}
+      {poseEnabled && poseLandmarks.current && (() => {
+        const defaultX = window.innerWidth - 220
+        const defaultY = window.innerHeight - 280
+        const tx = tablePos.x ?? defaultX
+        const ty = tablePos.y ?? defaultY
+        return (
+          <div className="joint-table"
+            style={{ left: tx, top: ty }}
+            onMouseDown={e => {
+              e.stopPropagation()
+              const startX = e.clientX - tx
+              const startY = e.clientY - ty
+              tableDragRef.current = { startX, startY }
+              const onMove = ev => {
+                setTablePos({ x: ev.clientX - tableDragRef.current.startX, y: ev.clientY - tableDragRef.current.startY })
+              }
+              const onUp = () => {
+                tableDragRef.current = null
+                window.removeEventListener('mousemove', onMove)
+                window.removeEventListener('mouseup', onUp)
+              }
+              window.addEventListener('mousemove', onMove)
+              window.addEventListener('mouseup', onUp)
+            }}
+            onTouchStart={e => {
+              e.stopPropagation()
+              const t0 = e.touches[0]
+              const startX = t0.clientX - tx
+              const startY = t0.clientY - ty
+              tableDragRef.current = { startX, startY }
+              const onMove = ev => {
+                const t1 = ev.touches[0]
+                setTablePos({ x: t1.clientX - tableDragRef.current.startX, y: t1.clientY - tableDragRef.current.startY })
+              }
+              const onEnd = () => {
+                tableDragRef.current = null
+                window.removeEventListener('touchmove', onMove)
+                window.removeEventListener('touchend', onEnd)
+              }
+              window.addEventListener('touchmove', onMove)
+              window.addEventListener('touchend', onEnd)
+            }}
+          >
+            <div className="joint-table-head">
+              <span>JOINT ANGLES</span>
+              <button onClick={() => setShowAnglePanel(v => !v)}>⚙</button>
+            </div>
+            <table className="joint-table-body">
+              <tbody>
+                {ANGLE_JOINTS.filter(j => enabledAngles[j.name]).map(j => {
+                  const val = calcJointAngle(j, poseWorldLandmarks.current)
+                  return val !== null ? (
+                    <tr key={j.name}>
+                      <td className="jt-name">{j.name}</td>
+                      <td className="jt-val">{j.type === 'shoulder' && val > 0 ? `+${val}°` : `${val}°`}</td>
+                    </tr>
+                  ) : null
+                })}
+                {throwStart !== null && ballRelease !== null && (
+                  <tr className="jt-release">
+                    <td className="jt-name">Release</td>
+                    <td className="jt-val jt-release-val">{Math.round(Math.abs(ballRelease - throwStart) * 1000)}ms</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )
+      })()}
 
       {/* Angle toggle panel */}
       {showAnglePanel && (
