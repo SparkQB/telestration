@@ -504,8 +504,9 @@ export default function App() {
     setPoseStatus('loading')
     try {
       await loadPose((results) => {
-        console.log('[SparkQB] onResults callback fired, landmarks:', results.poseLandmarks?.length)
         poseLandmarks.current = results.poseLandmarks || null
+        poseWorldLandmarks.current = results.poseWorldLandmarks || null
+        console.log('[SparkQB] onResults - 2D:', results.poseLandmarks?.length, '3D:', results.poseWorldLandmarks?.length)
         poseDetecting.current = false
         renderPoseOverlay()
       })
