@@ -299,6 +299,7 @@ export default function App() {
 
   // ── Pose state ───────────────────────────────────────────────────────────────
   const [poseEnabled,   setPoseEnabled]   = useState(false)
+  const poseEnabledRef = useRef(false)
   const [poseStatus,    setPoseStatus]    = useState('idle') // idle|loading|ready|error
   const [showAnglePanel,setShowAnglePanel]= useState(false)
   const [enabledAngles, setEnabledAngles] = useState(
@@ -398,6 +399,7 @@ export default function App() {
 
   useEffect(() => { renderShapes(shapes, null, selId) }, [shapes, selId, renderShapes])
   useEffect(() => { renderPoseOverlay() }, [enabledAngles])
+  useEffect(() => { poseEnabledRef.current = poseEnabled }, [poseEnabled])
 
   // ── Video frame loop ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -417,7 +419,7 @@ export default function App() {
       }
 
       // Fire pose detection in background
-      if (poseEnabled && !poseDetecting.current && ts - (loop._lastPose||0) > POSE_INTERVAL) {
+      if (poseEnabledRef.current && !poseDetecting.current && ts - (loop._lastPose||0) > POSE_INTERVAL) {
         loop._lastPose = ts
         runPoseDetection()
       }
