@@ -614,8 +614,10 @@ export default function App() {
 
   async function runPoseDetection() {
     const pose = (await import('./pose.js')).getPoseInstance()
-    if (!pose) { console.warn('[SparkQB] No pose instance'); return }
-    if (!vidRef.current) { console.warn('[SparkQB] No video'); return }
+    if (!pose) return
+    if (!vidRef.current) return
+    // Don't re-detect on a paused frame — hold last position to prevent drift
+    if (vidRef.current.paused && poseLandmarks.current) return
     poseDetecting.current = true
     try {
       await pose.send({ image: vidRef.current })
