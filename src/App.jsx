@@ -405,10 +405,8 @@ export default function App() {
   const gonioRef = useRef(null)  // in-progress goniometer { id, pts[] }
   const gonioDragPoint = useRef(-1) // which point is being dragged in select mode
 
-  // ── Release timer state ───────────────────────────────────────────────────────
-  const [throwStart,   setThrowStart]   = useState(null)   // timestamp in seconds
-  const [ballRelease,  setBallRelease]  = useState(null)   // timestamp in seconds
-  const [tablePos,     setTablePos]     = useState({ x: null, y: null }) // drag position
+  // ── Table drag state ─────────────────────────────────────────────────────────
+  const [tablePos,     setTablePos]     = useState({ x: null, y: null })
   const tableDragRef = useRef(null)
 
   function clampPan(px, py, z) {
@@ -1197,19 +1195,7 @@ export default function App() {
           <button className="speed-btn" onClick={cycleSpeed}>{SPEEDS[speedIdx]}×</button>
           <span className="tc">{fmt(currentT)}</span>
           {videoMeta.fps && <span className="fps-badge">{Math.round(videoMeta.fps)}fps</span>}
-          <div className="release-btns">
-            <button className={`release-mark-btn ${throwStart !== null ? 'marked' : ''}`}
-              onClick={() => setThrowStart(currentT)} title="Mark throw start">
-              {throwStart !== null ? `S: ${fmt(throwStart)}` : 'MARK START'}
-            </button>
-            <button className={`release-mark-btn release ${ballRelease !== null ? 'marked' : ''}`}
-              onClick={() => setBallRelease(currentT)} title="Mark ball release">
-              {ballRelease !== null ? `R: ${fmt(ballRelease)}` : 'MARK RELEASE'}
-            </button>
-            {(throwStart !== null || ballRelease !== null) && (
-              <button className="release-clear-btn" onClick={() => { setThrowStart(null); setBallRelease(null) }} title="Clear markers">✕</button>
-            )}
-          </div>
+
         </div>
       )}
 
@@ -1267,12 +1253,7 @@ export default function App() {
                     </tr>
                   )
                 })}
-                {throwStart !== null && ballRelease !== null && (
-                  <tr className="jt-release">
-                    <td className="jt-name">Release</td>
-                    <td className="jt-val jt-release-val" colSpan={2}>{Math.round(Math.abs(ballRelease - throwStart) * 1000)}ms</td>
-                  </tr>
-                )}
+
               </tbody>
             </table>
           </div>
