@@ -951,6 +951,8 @@ export default function App() {
     (tool === 'blur' ? shapes.filter(s => s.type === 'blur').slice(-1)[0]?.id : null)
   const activeBlurShape = shapes.find(s => s.id === activeBlurId)
 
+  if (!unlocked) return <LeadGate onUnlock={() => setUnlocked(true)} />
+
   return (
     <div className={`app ${isPortrait ? 'portrait' : 'landscape'}`} onClick={() => setPopover(null)}>
 
