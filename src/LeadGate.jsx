@@ -81,7 +81,7 @@ export default function LeadGate({ onUnlock }) {
           {error && <p className="gate-error">{error}</p>}
 
           <button type="submit" className="gate-submit" disabled={loading}>
-            {loading ? 'Loading…' : 'Get Started →'}
+            {loading ? 'LOADING…' : 'GET STARTED →'}
           </button>
         </form>
 
