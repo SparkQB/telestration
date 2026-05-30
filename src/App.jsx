@@ -379,6 +379,8 @@ export default function App() {
     Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true]))
   )
   const enabledAnglesRef = useRef(Object.fromEntries(ANGLE_JOINTS.map(j => [j.name, true])))
+  const [anglesVisible,    setAnglesVisible]    = useState(true)
+  const anglesVisibleRef   = useRef(true)
   const poseCanvasRef       = useRef(null)
   const poseLandmarks       = useRef(null)
   const poseWorldLandmarks  = useRef(null)
@@ -486,6 +488,7 @@ export default function App() {
   useEffect(() => { renderPoseOverlay() }, [enabledAngles])
   useEffect(() => { poseEnabledRef.current = poseEnabled }, [poseEnabled])
   useEffect(() => { enabledAnglesRef.current = enabledAngles; renderPoseOverlay() }, [enabledAngles])
+  useEffect(() => { anglesVisibleRef.current = anglesVisible; renderPoseOverlay() }, [anglesVisible])
 
   // ── Video frame loop ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -588,7 +591,6 @@ export default function App() {
       await loadPose((results) => {
         poseLandmarks.current = results.poseLandmarks || null
         poseWorldLandmarks.current = results.poseWorldLandmarks || null
-        console.log('[SparkQB] onResults - 2D:', results.poseLandmarks?.length, '3D:', results.poseWorldLandmarks?.length)
         poseDetecting.current = false
         renderPoseOverlay()
       })
@@ -608,7 +610,8 @@ export default function App() {
     const ctx = c.getContext('2d')
     ctx.clearRect(0, 0, c.width, c.height)
     if (!poseLandmarks.current) return
-    drawPoseOverlay(ctx, poseLandmarks.current, poseWorldLandmarks.current, enabledAnglesRef.current, c.width, c.height)
+    const anglesEnabled = anglesVisibleRef.current ? enabledAnglesRef.current : {}
+    drawPoseOverlay(ctx, poseLandmarks.current, poseWorldLandmarks.current, anglesEnabled, c.width, c.height)
   }
 
   async function runPoseDetection() {
@@ -1242,7 +1245,13 @@ export default function App() {
               window.addEventListener('touchmove', onMv); window.addEventListener('touchend', onEnd)
             }}
           >
-            <div className="joint-table-head">JOINT ANGLES</div>
+            <div className="joint-table-head">
+              <span>JOINT ANGLES</span>
+              <button className={`jt-master-toggle ${anglesVisible ? 'on' : 'off'}`}
+                onClick={() => setAnglesVisible(v => !v)}>
+                <span className={`jt-dot ${anglesVisible ? 'on' : 'off'}`}/>
+              </button>
+            </div>
             <table className="joint-table-body">
               <tbody>
                 {ANGLE_JOINTS.map(j => {
@@ -1251,7 +1260,7 @@ export default function App() {
                   return (
                     <tr key={j.name} className={on ? '' : 'jt-off'}>
                       <td className="jt-name">{j.name}</td>
-                      <td className="jt-val">{on && val !== null ? `${val}°` : '–'}</td>
+                      <td className="jt-val">{on && anglesVisible && val !== null ? `${val}°` : '–'}</td>
                       <td className="jt-toggle" onClick={() => setEnabledAngles(prev => ({ ...prev, [j.name]: !prev[j.name] }))}>
                         <span className={`jt-dot ${on ? 'on' : 'off'}`}/>
                       </td>
