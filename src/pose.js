@@ -86,61 +86,40 @@ function calcKnee(wl, side) {
   return Math.round(180 - angle) // 0 = straight, 180 = fully bent
 }
 
-// Shoulder external/internal rotation
-// Method: when elbow is bent, forearm position relative to upper arm plane
-// indicates rotation. Positive = external, negative = internal.
-function calcShoulderRotation(wl, side) {
-  const S = side === 'left' ? wl[11] : wl[12]
-  const E = side === 'left' ? wl[13] : wl[14]
-  const W = side === 'left' ? wl[15] : wl[16]
-  const H = side === 'left' ? wl[23] : wl[24]  // hip for reference
-  if (!S || !E || !W || !H) return null
+// Shoulder abduction/adduction — 2D angle between torso and upper arm
+// 0° = arm at side, 90° = arm horizontal, 180° = arm straight up
+// Uses 2D image landmarks for reliability
+function calcShoulderAbduction(wl2d, side) {
+  // wl2d here is actually poseLandmarks (2D) stored on the model
+  // We pass worldLandmarks but fall back gracefully
+  if (!wl2d) return null
+  const S = side === 'left' ? wl2d[11] : wl2d[12]
+  const E = side === 'left' ? wl2d[13] : wl2d[14]
+  const H = side === 'left' ? wl2d[23] : wl2d[24]
+  if (!S || !E || !H) return null
 
-  // Upper arm vector (shoulder to elbow)
-  const upperArm = norm(vec3(S, E))
-  // Torso up vector (hip to shoulder)  
-  const torsoUp  = norm(vec3(H, S))
-  // Torso lateral axis (cross product of torsoUp and a forward reference)
-  // We use the cross product of upperArm and torsoUp to get the plane normal
-  const planeNormal = norm(cross(upperArm, torsoUp))
-  // Forearm vector
-  const forearm = norm(vec3(E, W))
-  // Project forearm onto the plane perpendicular to upper arm
-  const proj = {
-    x: forearm.x - dot(forearm, upperArm) * upperArm.x,
-    y: forearm.y - dot(forearm, upperArm) * upperArm.y,
-    z: forearm.z - dot(forearm, upperArm) * upperArm.z,
-  }
-  // Reference direction: gravity (down)
-  const gravity = { x: 0, y: -1, z: 0 }
-  const refDir = {
-    x: gravity.x - dot(gravity, upperArm) * upperArm.x,
-    y: gravity.y - dot(gravity, upperArm) * upperArm.y,
-    z: gravity.z - dot(gravity, upperArm) * upperArm.z,
-  }
-  if (mag(proj) < 0.01 || mag(refDir) < 0.01) return null
+  // Vector from shoulder down to hip (torso reference = "straight down")
+  const torso = { x: H.x - S.x, y: H.y - S.y }
+  // Vector from shoulder to elbow (upper arm)
+  const arm   = { x: E.x - S.x, y: E.y - S.y }
 
-  const angle = angleBetween(proj, refDir)
-  // Sign: use plane normal to determine external vs internal
-  const c = cross(norm(refDir), norm(proj))
-  const sign = side === 'left'
-    ? (dot(c, upperArm) > 0 ? 1 : -1)
-    : (dot(c, upperArm) < 0 ? 1 : -1)
+  const dot2d = torso.x * arm.x + torso.y * arm.y
+  const magT  = Math.sqrt(torso.x**2 + torso.y**2)
+  const magA  = Math.sqrt(arm.x**2 + arm.y**2)
+  if (magT < 0.001 || magA < 0.001) return null
 
-  return Math.round(sign * angle)
+  const cosA = Math.max(-1, Math.min(1, dot2d / (magT * magA)))
+  return Math.round(Math.acos(cosA) * 180 / Math.PI)
 }
 
-export function calcJointAngle(joint, worldLandmarks) {
-  if (!worldLandmarks) { console.log('[SparkQB] calcJointAngle: no worldLandmarks'); return null }
-  let result
+export function calcJointAngle(joint, worldLandmarks, landmarks2d) {
+  if (!worldLandmarks) return null
   switch(joint.type) {
-    case 'elbow':    result = calcElbow(worldLandmarks, joint.side); break
-    case 'knee':     result = calcKnee(worldLandmarks, joint.side); break
-    case 'shoulder': result = calcShoulderRotation(worldLandmarks, joint.side); break
-    default: result = null
+    case 'elbow':    return calcElbow(worldLandmarks, joint.side)
+    case 'knee':     return calcKnee(worldLandmarks, joint.side)
+    case 'shoulder': return calcShoulderAbduction(worldLandmarks, joint.side)
+    default: return null
   }
-  console.log(`[SparkQB] ${joint.name}: ${result}`)
-  return result
 }
 
 // ── Draw angle label + arc ────────────────────────────────────────────────────
@@ -228,6 +207,46 @@ function drawAngleLabel(ctx, lm2d, joint, angle, canvasW, canvasH) {
   ctx.restore()
 }
 
+// Draw angle arc only (no label — label goes in floating table)
+function drawAngleArc(ctx, lm2d, joint, canvasW, canvasH) {
+  let vidx
+  if (joint.type === 'elbow')    vidx = joint.side === 'left' ? 13 : 14
+  else if (joint.type === 'knee') vidx = joint.side === 'left' ? 25 : 26
+  else vidx = joint.side === 'left' ? 11 : 12
+
+  const vpt = lm2d[vidx]; if (!vpt) return
+  const vx = vpt.x * canvasW, vy = vpt.y * canvasH
+  let ax, ay, bx, by
+
+  if (joint.type === 'elbow') {
+    const s = lm2d[joint.side === 'left' ? 11 : 12]
+    const w = lm2d[joint.side === 'left' ? 15 : 16]
+    if (s && w) { ax=s.x*canvasW; ay=s.y*canvasH; bx=w.x*canvasW; by=w.y*canvasH }
+  } else if (joint.type === 'knee') {
+    const h = lm2d[joint.side === 'left' ? 23 : 24]
+    const a = lm2d[joint.side === 'left' ? 27 : 28]
+    if (h && a) { ax=h.x*canvasW; ay=h.y*canvasH; bx=a.x*canvasW; by=a.y*canvasH }
+  } else {
+    const e = lm2d[joint.side === 'left' ? 13 : 14]
+    const h = lm2d[joint.side === 'left' ? 23 : 24]
+    if (e && h) { ax=e.x*canvasW; ay=e.y*canvasH; bx=h.x*canvasW; by=h.y*canvasH }
+  }
+
+  if (ax === undefined) return
+  const radius = Math.min(canvasW, canvasH) * 0.028
+  const angleA = Math.atan2(ay - vy, ax - vx)
+  const angleB = Math.atan2(by - vy, bx - vx)
+
+  ctx.save()
+  ctx.strokeStyle = '#00E5FF'
+  ctx.lineWidth = 1.5
+  ctx.globalAlpha = 0.8
+  ctx.beginPath()
+  ctx.arc(vx, vy, radius, Math.min(angleA, angleB), Math.max(angleA, angleB))
+  ctx.stroke()
+  ctx.restore()
+}
+
 // Draw full skeleton + angles
 export function drawPoseOverlay(ctx, landmarks, worldLandmarks, enabledAngles, canvasW, canvasH) {
   if (!landmarks || landmarks.length === 0) return
@@ -268,12 +287,12 @@ export function drawPoseOverlay(ctx, landmarks, worldLandmarks, enabledAngles, c
   })
   ctx.restore()
 
-  // Angle labels using 3D world landmarks
+  // Angle arcs only (no labels — table handles display)
   ANGLE_JOINTS.forEach(joint => {
     if (enabledAngles && !enabledAngles[joint.name]) return
     const angle = calcJointAngle(joint, worldLandmarks)
     if (angle === null) return
-    drawAngleLabel(ctx, landmarks, joint, angle, canvasW, canvasH)
+    drawAngleArc(ctx, landmarks, joint, canvasW, canvasH)
   })
 }
 
