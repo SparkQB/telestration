@@ -498,10 +498,12 @@ export default function App() {
     setPoseStatus('loading')
     try {
       await loadPose((results) => {
+        console.log('[SparkQB] onResults callback fired, landmarks:', results.poseLandmarks?.length)
         poseLandmarks.current = results.poseLandmarks || null
         poseDetecting.current = false
         renderPoseOverlay()
       })
+      console.log('[SparkQB] Pose ready, enabled')
       setPoseStatus('ready')
       setPoseEnabled(true)
     } catch(e) {
@@ -509,6 +511,8 @@ export default function App() {
       setPoseStatus('error')
     }
   }
+
+  
 
   function renderPoseOverlay() {
     const c = poseCanvasRef.current; if (!c) return
@@ -520,11 +524,13 @@ export default function App() {
 
   async function runPoseDetection() {
     const pose = (await import('./pose.js')).getPoseInstance()
-    if (!pose || !vidRef.current || vidRef.current.paused && poseLandmarks.current) return
+    if (!pose) { console.warn('[SparkQB] No pose instance'); return }
+    if (!vidRef.current) { console.warn('[SparkQB] No video'); return }
     poseDetecting.current = true
     try {
       await pose.send({ image: vidRef.current })
     } catch(e) {
+      console.error('[SparkQB] pose.send error:', e)
       poseDetecting.current = false
     }
   }
