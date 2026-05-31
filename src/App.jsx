@@ -58,12 +58,12 @@ const I = ({ d, size = 20, sw = 1.8, fill = 'none' }) => (
 // ── Tools ─────────────────────────────────────────────────────────────────────
 const TOOLS = [
   { id:'pen',    label:'Pen',   icon:'M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z' },
+  { id:'line',   label:'Line',  icon:'M5 19L19 5' },
   { id:'arrow',  label:'Arrow', icon:'M5 12h14M12 5l7 7-7 7' },
-  { id:'route',  label:'Route', icon:'M3 17c3-3 6-5 9-5s6 2 9-2' },
   { id:'circle', label:'Circle',icon:'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z' },
   { id:'rect',   label:'Box',   icon:'M3 3h18v18H3z' },
   { id:'text',   label:'Text',  icon:'M4 7V4h16v3M9 20h6M12 4v16' },
-  { id:'blur',   label:'Blur',  icon:null },  // text button, no icon
+  { id:'blur',   label:'Blur',  icon:null },
   { id:'gonio',  label:'Angle', icon:'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM12 12l-4-4M12 12l4-4M12 12v5' },
   { id:'select', label:'Move',  icon:'M5 3l14 9-7 1-4 7z' },
   { id:'eraser', label:'Erase', icon:'M20 20H7L3 16l10-10 7 7-1.5 1.5M6.5 17.5l10-10' },
@@ -72,7 +72,7 @@ const TOOLS = [
 const PALETTE = ['#B2FF00','#004FFF','#FF0400','#F8F8F8','#FFD600','#FF6B00','#00E5FF','#101214']
 const SPEEDS  = [0.1, 0.25, 0.5, 1, 2]
 
-const defaultStyle = () => ({ color: '#B2FF00', lw: 3, opacity: 1 })
+const defaultStyle = () => ({ color: '#B2FF00', lw: 3, opacity: 1, dotted: false, textBg: true, textColor: '#101214' })
 const initToolStyles = () => Object.fromEntries(TOOLS.map(t => [t.id, defaultStyle()]))
 
 let _uid = 1
@@ -302,6 +302,7 @@ function bounds(s) {
     case 'rect': case 'blur': return { x:Math.min(s.x,s.x+s.w), y:Math.min(s.y,s.y+s.h), w:Math.abs(s.w), h:Math.abs(s.h) }
     case 'arrow': return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) }
     case 'text':  return { x:s.x, y:s.y-(s.fs||28), w:120, h:(s.fs||28)+8 }
+    case 'line': return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) }
     case 'gonio': {
       if (!s.pts?.length) return null
       const xs = s.pts.map(p=>p.x), ys = s.pts.map(p=>p.y)
@@ -432,10 +433,13 @@ export default function App() {
     if (h > ah) { h = ah; w = ah * ratio }
     w = Math.floor(w); h = Math.floor(h)
     csz.current = { w, h }
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
     ;[bgRef, drRef, poseCanvasRef, ovRef].forEach(r => {
       if (!r.current) return
-      r.current.width  = w; r.current.height = h
+      r.current.width  = w * dpr; r.current.height = h * dpr
       r.current.style.width  = w + 'px'; r.current.style.height = h + 'px'
+      const ctx = r.current.getContext('2d')
+      if (ctx) ctx.scale(dpr, dpr)
     })
     renderBg()
     renderShapes(shapes)
@@ -723,7 +727,8 @@ export default function App() {
     }
 
     drawing.current = true
-    if (tool==='pen'||tool==='route') stroke.current = { id:uid(), type:tool, pts:[pos], ...ts }
+    if (tool==='pen') stroke.current = { id:uid(), type:'pen', pts:[pos], ...ts }
+    else if (tool==='line')   stroke.current = { id:uid(), type:'line',   x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
     else if (tool==='arrow')  stroke.current = { id:uid(), type:'arrow',  x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
     else if (tool==='circle') stroke.current = { id:uid(), type:'circle', cx:pos.x, cy:pos.y, r:0, ...ts }
     else if (tool==='rect')   stroke.current = { id:uid(), type:'rect',   x:pos.x, y:pos.y, w:0, h:0, ...ts }
@@ -763,7 +768,8 @@ export default function App() {
 
     if (!drawing.current || !stroke.current) return
     const s = stroke.current
-    if (s.type==='pen'||s.type==='route') s.pts.push(pos)
+    if (s.type==='pen') s.pts.push(pos)
+    else if (s.type==='line')   { s.x2=pos.x; s.y2=pos.y }
     else if (s.type==='arrow')  { s.x2=pos.x; s.y2=pos.y }
     else if (s.type==='circle') s.r = Math.hypot(pos.x-s.cx, pos.y-s.cy)
     else if (s.type==='rect'||s.type==='blur') { s.w=pos.x-s.x; s.h=pos.y-s.y }
@@ -841,14 +847,19 @@ export default function App() {
     v.src     = url
     v.load()  // required on Safari to trigger metadata load
     v.onloadedmetadata = () => {
-      let fps = 30
+      let fps = 60
       try {
-        if (v.videoTracks?.[0]) fps = v.videoTracks[0].getSettings().frameRate || 30
+        if (v.videoTracks?.[0]) {
+          const fr = v.videoTracks[0].getSettings().frameRate
+          if (fr && fr > 0) fps = Math.round(fr)
+        }
       } catch(e) {}
       setVideoMeta({ w: v.videoWidth, h: v.videoHeight, fps })
       setDuration(v.duration)
       setCurrentT(0)
       resetView()
+      // Show first frame immediately
+      v.currentTime = 0.001
     }
     v.onerror = (err) => console.error('Video load error:', err)
   }
@@ -1095,7 +1106,37 @@ export default function App() {
                 <div className={`tool-popover ${isPortrait ? 'pop-left' : 'pop-top'}`}
                   onClick={e => e.stopPropagation()}>
                   <div className="pop-head">{t.label.toUpperCase()}</div>
-                  {t.id !== 'blur' && t.id !== 'eraser' && t.id !== 'select' && (
+                  {(t.id === 'line' || t.id === 'arrow') && (
+                  <div className="pop-dotted-row">
+                    <span className="pop-label">STYLE</span>
+                    <div className="pop-dotted-btns">
+                      <button className={`pop-dot-btn ${!ts.dotted ? 'active' : ''}`}
+                        onClick={() => updateStyle('dotted', false)}>──</button>
+                      <button className={`pop-dot-btn ${ts.dotted ? 'active' : ''}`}
+                        onClick={() => updateStyle('dotted', true)}>- -</button>
+                    </div>
+                  </div>
+                )}
+                {t.id === 'text' && (
+                  <div className="pop-text-options">
+                    <div className="pop-label">TEXT COLOR</div>
+                    <div className="pop-swatches">
+                      {PALETTE.map(c => (
+                        <button key={c} className={`pop-sw ${ts.textColor===c?'sel':''}`}
+                          style={{ background:c, border: c==='#101214'?'1px solid rgba(255,255,255,0.2)':'none' }}
+                          onClick={() => updateStyle('textColor', c)}/>
+                      ))}
+                    </div>
+                    <div className="pop-label">BACKGROUND</div>
+                    <div className="pop-dotted-btns">
+                      <button className={`pop-dot-btn ${ts.textBg!==false?'active':''}`}
+                        onClick={() => updateStyle('textBg', true)}>ON</button>
+                      <button className={`pop-dot-btn ${ts.textBg===false?'active':''}`}
+                        onClick={() => updateStyle('textBg', false)}>OFF</button>
+                    </div>
+                  </div>
+                )}
+                {t.id !== 'blur' && t.id !== 'eraser' && t.id !== 'select' && t.id !== 'text' && (
                     <>
                       <div className="pop-label">COLOR</div>
                       <div className="pop-swatches">
