@@ -702,8 +702,14 @@ export default function App() {
 
     if (tool === 'select') {
       const hit = [...shapes].reverse().find(s => hitTest(s, pos.x, pos.y))
-      // Double tap on text — enter edit mode
-      if (hit?.type === 'text' && e.detail === 2) {
+      // Double tap/click to edit text
+      const now = Date.now()
+      const isDouble = hit?.type === 'text' && (
+        e.detail === 2 ||
+        (lastTapRef.current.id === hit.id && now - lastTapRef.current.time < 400)
+      )
+      if (hit?.type === 'text') lastTapRef.current = { id: hit.id, time: now }
+      if (isDouble) {
         setEditingTextId(hit.id)
         setEditingText(hit.text)
         return
@@ -827,7 +833,8 @@ export default function App() {
           i === dragSt.current.gonioPt ? { x: pos.x, y: pos.y } : p
         )
         m = { ...o, pts: newPts }
-      } else if (o.type==='pen'||o.type==='route') m = { ...o, pts: o.pts.map(p=>({x:p.x+dx,y:p.y+dy})) }
+      } else if (o.type==='pen') m = { ...o, pts: o.pts.map(p=>({x:p.x+dx,y:p.y+dy})) }
+      else if (o.type==='line')   m = { ...o, x1:o.x1+dx,y1:o.y1+dy,x2:o.x2+dx,y2:o.y2+dy }
       else if (o.type==='arrow')  m = { ...o, x1:o.x1+dx,y1:o.y1+dy,x2:o.x2+dx,y2:o.y2+dy }
       else if (o.type==='circle') m = { ...o, cx:o.cx+dx,cy:o.cy+dy }
       else m = { ...o, x:o.x+dx, y:o.y+dy }
@@ -842,7 +849,8 @@ export default function App() {
     // Clear the live preview from overlay canvas
     const oc = ovRef.current
     if (oc) oc.getContext('2d').clearRect(0, 0, oc.width, oc.height)
-    const valid = (s.type==='pen'||s.type==='route') ? s.pts.length>2
+    const valid = s.type==='pen' ? s.pts.length>2
+      : s.type==='line'   ? Math.hypot(s.x2-s.x1,s.y2-s.y1)>8
       : s.type==='arrow'  ? Math.hypot(s.x2-s.x1,s.y2-s.y1)>8
       : s.type==='circle' ? s.r>5
       : (s.type==='rect'||s.type==='blur') ? Math.abs(s.w)>10&&Math.abs(s.h)>10 : false
@@ -853,7 +861,8 @@ export default function App() {
   // ── Text / label ──────────────────────────────────────────────────────────────
   function commitTxt() {
     if (!pendingTxt || !txtVal.trim()) { setPendingTxt(null); return }
-    push([...shapes, { id:uid(), type:'text', x:pendingTxt.x, y:pendingTxt.y, text:txtVal, fs:30, ...ts }])
+    push([...shapes, { id:uid(), type:'text', x:pendingTxt.x, y:pendingTxt.y, text:txtVal, fs:22,
+      textBg: ts.textBg !== false, textColor: ts.textColor || '#101214', ...ts }])
     setPendingTxt(null); setTxtVal('')
   }
 
@@ -1239,7 +1248,7 @@ export default function App() {
           return (
             <div className="txt-overlay"
               style={{ left:(pendingTxt.x/(c?.width||1)*100)+'%', top:(pendingTxt.y/(c?.height||1)*100)+'%' }}>
-              <input ref={txtRef} value={txtVal} style={{ color: ts.color }}
+              <input ref={txtRef} value={txtVal} style={{ color: '#101214' }}
                 onChange={e => setTxtVal(e.target.value)}
                 onKeyDown={e => { if(e.key==='Enter') commitTxt(); if(e.key==='Escape') setPendingTxt(null) }}
                 placeholder="Type…" className="txt-input" autoFocus/>
