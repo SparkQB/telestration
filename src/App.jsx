@@ -145,6 +145,19 @@ function renderShape(ctx, s, selected = false) {
       }
       break
 
+    case 'line': {
+      ctx.restore()
+      ctx.save()
+      ctx.globalAlpha = s.opacity ?? 1
+      ctx.strokeStyle = s.color; ctx.lineWidth = s.lw ?? 2
+      ctx.lineCap = 'round'
+      if (s.dotted) ctx.setLineDash([8, 6])
+      ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.restore()
+      return
+    }
+
     case 'arrow':
       ctx.restore()
       drawArrow(ctx, s.x1, s.y1, s.x2, s.y2, s.color, s.lw, s.opacity)
@@ -423,6 +436,7 @@ export default function App() {
   // ── Goniometer state ─────────────────────────────────────────────────────────
   const gonioRef = useRef(null)  // in-progress goniometer { id, pts[] }
   const gonioDragPoint = useRef(-1) // which point is being dragged in select mode
+  const lastTapRef = useRef({ id: null, time: 0 }) // for double-tap detection on touch
 
   // ── Table drag state ─────────────────────────────────────────────────────────
   const [tablePos,     setTablePos]     = useState({ x: null, y: null })
