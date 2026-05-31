@@ -247,9 +247,9 @@
   padding: 5px 10px;
   font-family: 'Roboto Mono', monospace;
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 400;
   color: #101214;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   width: 190px;
   outline: none;
 }
