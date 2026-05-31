@@ -162,9 +162,24 @@ function renderShape(ctx, s, selected = false) {
     case 'rect':
       ctx.strokeRect(s.x, s.y, s.w, s.h); break
 
-    case 'text':
-      ctx.font = `700 ${s.fs||28}px Anton, sans-serif`
-      ctx.fillText(s.text, s.x, s.y); break
+    case 'text': {
+      const fontSize = s.fs || 20
+      ctx.font = `700 ${fontSize}px 'Roboto Mono', monospace`
+      const tw = ctx.measureText(s.text).width
+      const pad = 6
+      if (s.textBg !== false) {
+        ctx.save()
+        ctx.fillStyle = 'rgba(255,255,255,0.92)'
+        ctx.beginPath()
+        ctx.roundRect(s.x - pad, s.y - fontSize, tw + pad*2, fontSize + 8, 4)
+        ctx.fill()
+        ctx.restore()
+      }
+      ctx.fillStyle = s.textColor || '#101214'
+      ctx.textBaseline = 'alphabetic'
+      ctx.fillText(s.text, s.x, s.y)
+      break
+    }
 
     case 'player-o':
       ctx.lineWidth = 3
@@ -673,6 +688,12 @@ export default function App() {
 
     if (tool === 'select') {
       const hit = [...shapes].reverse().find(s => hitTest(s, pos.x, pos.y))
+      // Double tap on text — enter edit mode
+      if (hit?.type === 'text' && e.detail === 2) {
+        setEditingTextId(hit.id)
+        setEditingText(hit.text)
+        return
+      }
       setSelId(hit?.id || null)
       if (hit) {
         // Check if clicking a goniometer control point
@@ -1209,6 +1230,26 @@ export default function App() {
                 onKeyDown={e => { if(e.key==='Enter') commitTxt(); if(e.key==='Escape') setPendingTxt(null) }}
                 placeholder="Type…" className="txt-input" autoFocus/>
               <button className="txt-ok" onClick={commitTxt}>OK</button>
+            </div>
+          )
+        })()}
+
+        {editingTextId && (() => {
+          const s = shapes.find(sh => sh.id === editingTextId)
+          if (!s) return null
+          const c = bgRef.current
+          const commitEdit = () => {
+            if (editingText.trim()) push(shapes.map(sh => sh.id === editingTextId ? { ...sh, text: editingText } : sh))
+            setEditingTextId(null); setEditingText('')
+          }
+          return (
+            <div className="txt-overlay"
+              style={{ left:(s.x/(c?.width||1)*100)+'%', top:(s.y/(c?.height||1)*100)+'%' }}>
+              <input value={editingText} style={{ color: s.textColor || '#101214' }}
+                onChange={e => setEditingText(e.target.value)}
+                onKeyDown={e => { if(e.key==='Enter') commitEdit(); if(e.key==='Escape') { setEditingTextId(null); setEditingText('') } }}
+                className="txt-input" autoFocus/>
+              <button className="txt-ok" onClick={commitEdit}>OK</button>
             </div>
           )
         })()}
