@@ -702,18 +702,6 @@ export default function App() {
 
     if (tool === 'select') {
       const hit = [...shapes].reverse().find(s => hitTest(s, pos.x, pos.y))
-      // Double tap/click to edit text
-      const now = Date.now()
-      const isDouble = hit?.type === 'text' && (
-        e.detail === 2 ||
-        (lastTapRef.current.id === hit.id && now - lastTapRef.current.time < 400)
-      )
-      if (hit?.type === 'text') lastTapRef.current = { id: hit.id, time: now }
-      if (isDouble) {
-        setEditingTextId(hit.id)
-        setEditingText(hit.text)
-        return
-      }
       setSelId(hit?.id || null)
       if (hit) {
         // Check if clicking a goniometer control point
@@ -738,7 +726,22 @@ export default function App() {
       }
       return
     }
-    if (tool === 'text') { setPendingTxt(pos); setTxtVal(''); setTimeout(() => txtRef.current?.focus(), 60); return }
+    if (tool === 'text') {
+      // Double-tap existing text to edit it
+      const now = Date.now()
+      const hitText = [...shapes].reverse().find(s => s.type === 'text' && hitTest(s, pos.x, pos.y))
+      const isDouble = hitText && (
+        e.detail === 2 ||
+        (lastTapRef.current.id === hitText.id && now - lastTapRef.current.time < 400)
+      )
+      if (hitText) lastTapRef.current = { id: hitText.id, time: now }
+      if (isDouble) {
+        setEditingTextId(hitText.id); setEditingText(hitText.text); return
+      }
+      // Single tap on empty area — create new text
+      if (!hitText) { setPendingTxt(pos); setTxtVal(''); setTimeout(() => txtRef.current?.focus(), 60) }
+      return
+    }
     if (tool === 'player-o') { setLblModal({ ...pos }); setLblVal(''); return }
     if (tool === 'player-x') { push([...shapes, { id: uid(), type: 'player-x', x: pos.x, y: pos.y, r: 20, ...ts }]); return }
 
