@@ -170,9 +170,7 @@ function renderShape(ctx, s, selected = false) {
       if (s.textBg !== false) {
         ctx.save()
         ctx.fillStyle = 'rgba(255,255,255,0.92)'
-        ctx.beginPath()
-        ctx.roundRect(s.x - pad, s.y - fontSize, tw + pad*2, fontSize + 8, 4)
-        ctx.fill()
+        ctx.fillRect(s.x - pad, s.y - fontSize, tw + pad*2, fontSize + 8)
         ctx.restore()
       }
       ctx.fillStyle = s.textColor || '#101214'
@@ -244,7 +242,7 @@ function renderShape(ctx, s, selected = false) {
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
         const tw = ctx.measureText(`${angle}°`).width
         ctx.fillStyle = 'rgba(0,0,0,0.65)'
-        ctx.beginPath(); ctx.roundRect(lx-tw/2-4, ly-10, tw+8, 20, 4); ctx.fill()
+        ctx.fillRect(lx-tw/2-4, ly-10, tw+8, 20)
         ctx.fillStyle = CYAN
         ctx.fillText(`${angle}°`, lx, ly)
       }
@@ -369,8 +367,10 @@ export default function App() {
   const [currentT,    setCurrentT]    = useState(0)
   const [duration,    setDuration]    = useState(0)
   const [speedIdx,    setSpeedIdx]    = useState(3)
-  const [selId,       setSelId]       = useState(null)
-  const [pendingTxt,  setPendingTxt]  = useState(null)
+  const [selId,         setSelId]         = useState(null)
+  const [editingTextId, setEditingTextId] = useState(null)
+  const [editingText,   setEditingText]   = useState('')
+  const [pendingTxt,    setPendingTxt]    = useState(null)
   const [txtVal,      setTxtVal]      = useState('')
   const [lblModal,    setLblModal]    = useState(null)
   const [lblVal,      setLblVal]      = useState('')
