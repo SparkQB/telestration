@@ -746,8 +746,24 @@ export default function App() {
     if (tool === 'player-o') { setLblModal({ ...pos }); setLblVal(''); return }
     if (tool === 'player-x') { push([...shapes, { id: uid(), type: 'player-x', x: pos.x, y: pos.y, r: 20, ...ts }]); return }
 
-    // Goniometer — point placed on onUp, not onDown
-    if (tool === 'gonio') return
+    // Goniometer — tap to place points one at a time
+    if (tool === 'gonio') {
+      if (!gonioRef.current) {
+        gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
+      } else {
+        gonioRef.current.pts.push(pos)
+        if (gonioRef.current.pts.length === 3) {
+          push([...shapes, gonioRef.current])
+          gonioRef.current = null
+        }
+      }
+      const oc = ovRef.current; if (oc) {
+        const octx = oc.getContext('2d')
+        octx.clearRect(0, 0, oc.width, oc.height)
+        if (gonioRef.current) renderShape(octx, gonioRef.current, false)
+      }
+      return
+    }
 
     drawing.current = true
     if (tool==='pen') stroke.current = { id:uid(), type:'pen', pts:[pos], ...ts }
