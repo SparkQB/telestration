@@ -746,27 +746,8 @@ export default function App() {
     if (tool === 'player-o') { setLblModal({ ...pos }); setLblVal(''); return }
     if (tool === 'player-x') { push([...shapes, { id: uid(), type: 'player-x', x: pos.x, y: pos.y, r: 20, ...ts }]); return }
 
-    // Goniometer — tap to place points one at a time
-    if (tool === 'gonio') {
-      if (!gonioRef.current) {
-        // First tap — create with first point
-        gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
-      } else {
-        gonioRef.current.pts.push(pos)
-        if (gonioRef.current.pts.length === 3) {
-          // Third tap — commit
-          push([...shapes, gonioRef.current])
-          gonioRef.current = null
-        }
-      }
-      // Show preview
-      const oc = ovRef.current; if (oc) {
-        const octx = oc.getContext('2d')
-        octx.clearRect(0, 0, oc.width, oc.height)
-        if (gonioRef.current) renderShape(octx, gonioRef.current, false)
-      }
-      return
-    }
+    // Goniometer — point placed on onUp, not onDown
+    if (tool === 'gonio') return
 
     drawing.current = true
     if (tool==='pen') stroke.current = { id:uid(), type:'pen', pts:[pos], ...ts }
@@ -844,6 +825,31 @@ export default function App() {
       else m = { ...o, x:o.x+dx, y:o.y+dy }
       if (m) push(shapes.map(s=>s.id===m.id?m:s))
       dragSt.current = null; gonioDragPoint.current = -1; return
+    }
+
+    // Goniometer — place point on finger lift
+    if (tool === 'gonio') {
+      const oc = ovRef.current
+      const r  = oc.getBoundingClientRect()
+      const src = e.changedTouches ? e.changedTouches[0] : e
+      const pos = { x:(src.clientX-r.left)*(oc.width/r.width), y:(src.clientY-r.top)*(oc.height/r.height) }
+      if (!gonioRef.current) {
+        gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
+      } else {
+        gonioRef.current.pts.push(pos)
+        if (gonioRef.current.pts.length === 3) {
+          push([...shapes, gonioRef.current])
+          gonioRef.current = null
+          const octx = oc.getContext('2d')
+          octx.clearRect(0, 0, oc.width, oc.height)
+        }
+      }
+      if (gonioRef.current) {
+        const octx = oc.getContext('2d')
+        octx.clearRect(0, 0, oc.width, oc.height)
+        renderShape(octx, gonioRef.current, false)
+      }
+      return
     }
 
     if (!drawing.current || !stroke.current) return
