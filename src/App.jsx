@@ -231,12 +231,17 @@ function renderShape(ctx, s, selected = false) {
           const cosA = Math.max(-1, Math.min(1, (vA.x*vB.x + vA.y*vB.y) / (magA*magB)))
           const angle = Math.round(Math.acos(cosA) * 180 / Math.PI)
           if (!isNaN(angle)) {
-            // Arc
+            // Arc — always draw the shorter arc between the two arms
             const radius = Math.min(magA, magB) * 0.35
             const a1 = Math.atan2(vA.y, vA.x)
             const a2 = Math.atan2(vB.y, vB.x)
+            // Calculate angular difference to pick correct arc direction
+            let diff = a2 - a1
+            while (diff > Math.PI) diff -= 2*Math.PI
+            while (diff < -Math.PI) diff += 2*Math.PI
+            const counterClockwise = diff < 0
             ctx.beginPath()
-            ctx.arc(p1.x, p1.y, radius, Math.min(a1,a2), Math.max(a1,a2))
+            ctx.arc(p1.x, p1.y, radius, a1, a2, counterClockwise)
             ctx.stroke()
             // Label at bisector
             const bx = vA.x/magA + vB.x/magB
