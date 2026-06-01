@@ -839,31 +839,6 @@ export default function App() {
       dragSt.current = null; gonioDragPoint.current = -1; return
     }
 
-    // Goniometer — place point on finger lift
-    if (tool === 'gonio') {
-      const oc = ovRef.current
-      const r  = oc.getBoundingClientRect()
-      const src = e.changedTouches ? e.changedTouches[0] : e
-      const pos = { x:(src.clientX-r.left)*(oc.width/r.width), y:(src.clientY-r.top)*(oc.height/r.height) }
-      if (!gonioRef.current) {
-        gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
-      } else {
-        gonioRef.current.pts.push(pos)
-        if (gonioRef.current.pts.length === 3) {
-          push([...shapes, gonioRef.current])
-          gonioRef.current = null
-          const octx = oc.getContext('2d')
-          octx.clearRect(0, 0, oc.width, oc.height)
-        }
-      }
-      if (gonioRef.current) {
-        const octx = oc.getContext('2d')
-        octx.clearRect(0, 0, oc.width, oc.height)
-        renderShape(octx, gonioRef.current, false)
-      }
-      return
-    }
-
     if (!drawing.current || !stroke.current) return
     drawing.current = false
     const s = stroke.current; stroke.current = null
