@@ -433,6 +433,7 @@ export default function App() {
   // ── Goniometer state ─────────────────────────────────────────────────────────
   const gonioRef = useRef(null)  // in-progress goniometer { id, pts[] }
   const gonioDragPoint = useRef(-1) // which point is being dragged in select mode
+  const gonioLastTap = useRef(0)  // timestamp of last goniometer tap
   const lastTapRef = useRef({ id: null, time: 0 }) // for double-tap detection on touch
 
   // ── Table drag state ─────────────────────────────────────────────────────────
@@ -447,6 +448,19 @@ export default function App() {
   }
 
   useEffect(() => { shapesRef.current = shapes }, [shapes])
+
+  // Cancel in-progress goniometer on Escape
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape' && gonioRef.current) {
+        gonioRef.current = null
+        const oc = ovRef.current
+        if (oc) oc.getContext('2d').clearRect(0, 0, oc.width, oc.height)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const ts = toolStyles[tool]
 
@@ -744,6 +758,9 @@ export default function App() {
 
     // Goniometer — tap to place points one at a time
     if (tool === 'gonio') {
+      const now = Date.now()
+      if (now - gonioLastTap.current < 300) return  // ignore accidental double-taps
+      gonioLastTap.current = now
       if (!gonioRef.current) {
         gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
       } else {
@@ -987,7 +1004,16 @@ export default function App() {
 
   function handleToolClick(id) {
     if (tool === id) setPopover(popover === id ? null : id)
-    else { setTool(id); setSelId(null); setPopover(null) }
+    else {
+      setTool(id); setSelId(null); setPopover(null)
+      // Cancel any in-progress goniometer
+      if (gonioRef.current) {
+        gonioRef.current = null
+        gonioLastTap.current = 0
+        const oc = ovRef.current
+        if (oc) oc.getContext('2d').clearRect(0, 0, oc.width, oc.height)
+      }
+    }
   }
 
   const isPortrait = videoMeta ? videoMeta.h > videoMeta.w : false
@@ -1277,7 +1303,8 @@ export default function App() {
         {/* Generic delete for non-blur selected */}
         {selId && !selectedIsBlur && (
           <button className="del-btn"
-            onClick={() => { push(shapes.filter(s => s.id !== selId)); setSelId(null) }}>
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); push(shapes.filter(s => s.id !== selId)); setSelId(null) }}>
             <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={14}/> Delete
           </button>
         )}
