@@ -396,7 +396,8 @@ export default function App() {
 
   const [unlocked, setUnlocked] = useState(isLeadSubmitted())
 
-  const drawing = useRef(false)
+  const drawing   = useRef(false)
+  const scrubbing  = useRef(false)
   const stroke  = useRef(null)
   const dragSt  = useRef(null)
   const csz     = useRef({ w: 1280, h: 720 })
@@ -462,10 +463,14 @@ export default function App() {
     if (h > ah) { h = ah; w = ah * ratio }
     w = Math.floor(w); h = Math.floor(h)
     csz.current = { w, h }
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
     ;[bgRef, drRef, poseCanvasRef, ovRef].forEach(r => {
       if (!r.current) return
-      r.current.width  = w; r.current.height = h
-      r.current.style.width  = w + 'px'; r.current.style.height = h + 'px'
+      r.current.width  = w * dpr
+      r.current.height = h * dpr
+      r.current.style.width  = w + 'px'
+      r.current.style.height = h + 'px'
+      r.current.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0)
     })
     renderBg()
     renderShapes(shapes)
@@ -526,7 +531,7 @@ export default function App() {
     if (!videoMeta) return
     const loop = (ts) => {
       renderBg()
-      if (vidRef.current) setCurrentT(vidRef.current.currentTime)
+      if (vidRef.current && !scrubbing.current) setCurrentT(vidRef.current.currentTime)
 
       // Always render shapes every frame — never block on detection
       renderShapes(shapesRef.current, null, null, trackingRef.current)
