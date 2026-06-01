@@ -240,22 +240,26 @@ function renderShape(ctx, s, selected = false) {
         ctx.arc(pV.x, pV.y, radius, Math.min(angleA,angleB), Math.max(angleA,angleB))
         ctx.stroke()
 
-        // Calculate angle
+        // Calculate angle — only when all 3 points placed
         const vA = { x: pA.x-pV.x, y: pA.y-pV.y }
         const vB = { x: pB.x-pV.x, y: pB.y-pV.y }
         const dot = vA.x*vB.x + vA.y*vB.y
         const magA = Math.hypot(vA.x, vA.y), magB = Math.hypot(vB.x, vB.y)
+        if (magA < 0.01 || magB < 0.01) { ctx.restore(); break }
         const angle = Math.round(Math.acos(Math.max(-1,Math.min(1,dot/(magA*magB)))) * 180/Math.PI)
+        if (isNaN(angle)) { ctx.restore(); break }
 
-        // Label
-        const midAngle = (angleA + angleB) / 2
-        const lx = pV.x + Math.cos(midAngle) * (radius + 16)
-        const ly = pV.y + Math.sin(midAngle) * (radius + 16)
-        ctx.font = `bold 14px 'Roboto Mono', monospace`
+        // Label — use bisector of the two arm vectors for correct placement
+        const bisectX = (vA.x/magA) + (vB.x/magB)
+        const bisectY = (vA.y/magA) + (vB.y/magB)
+        const bisectMag = Math.hypot(bisectX, bisectY) || 1
+        const lx = pV.x + (bisectX/bisectMag) * (radius + 20)
+        const ly = pV.y + (bisectY/bisectMag) * (radius + 20)
+        ctx.font = `600 13px 'Roboto Mono', monospace`
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
         const tw = ctx.measureText(`${angle}°`).width
-        ctx.fillStyle = 'rgba(0,0,0,0.65)'
-        ctx.fillRect(lx-tw/2-4, ly-10, tw+8, 20)
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'
+        ctx.fillRect(lx-tw/2-4, ly-9, tw+8, 18)
         ctx.fillStyle = CYAN
         ctx.fillText(`${angle}°`, lx, ly)
       }
