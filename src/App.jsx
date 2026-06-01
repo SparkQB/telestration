@@ -463,14 +463,10 @@ export default function App() {
     if (h > ah) { h = ah; w = ah * ratio }
     w = Math.floor(w); h = Math.floor(h)
     csz.current = { w, h }
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
     ;[bgRef, drRef, poseCanvasRef, ovRef].forEach(r => {
       if (!r.current) return
-      r.current.width  = w * dpr
-      r.current.height = h * dpr
-      r.current.style.width  = w + 'px'
-      r.current.style.height = h + 'px'
-      r.current.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0)
+      r.current.width  = w; r.current.height = h
+      r.current.style.width  = w + 'px'; r.current.style.height = h + 'px'
     })
     renderBg()
     renderShapes(shapes)
