@@ -211,65 +211,52 @@ function renderShape(ctx, s, selected = false) {
     }
 
     case 'gonio': {
-      // Need at least 2 points to draw anything
       if (!s.pts || s.pts.length < 2) break
       const CYAN = '#00E5FF'
-      ctx.strokeStyle = CYAN; ctx.fillStyle = CYAN; ctx.lineWidth = 2
-      ctx.globalAlpha = 1
+      ctx.strokeStyle = CYAN; ctx.lineWidth = 2; ctx.globalAlpha = 1
 
-      const [pA, pV, pB] = s.pts  // A = first arm, V = vertex, B = second arm
+      const [p0, p1, p2] = s.pts
 
-      // Draw lines from vertex to each point
-      if (pV) {
-        ctx.beginPath(); ctx.moveTo(pA.x, pA.y); ctx.lineTo(pV.x, pV.y); ctx.stroke()
-        if (pB) {
-          ctx.beginPath(); ctx.moveTo(pV.x, pV.y); ctx.lineTo(pB.x, pB.y); ctx.stroke()
+      // Draw lines
+      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke()
+      if (p2) {
+        ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke()
+
+        // Angle calc at p1 (vertex)
+        const vA = { x: p0.x-p1.x, y: p0.y-p1.y }
+        const vB = { x: p2.x-p1.x, y: p2.y-p1.y }
+        const magA = Math.hypot(vA.x, vA.y)
+        const magB = Math.hypot(vB.x, vB.y)
+        if (magA > 0.01 && magB > 0.01) {
+          const cosA = Math.max(-1, Math.min(1, (vA.x*vB.x + vA.y*vB.y) / (magA*magB)))
+          const angle = Math.round(Math.acos(cosA) * 180 / Math.PI)
+          if (!isNaN(angle)) {
+            // Arc
+            const radius = Math.min(magA, magB) * 0.35
+            const a1 = Math.atan2(vA.y, vA.x)
+            const a2 = Math.atan2(vB.y, vB.x)
+            ctx.beginPath()
+            ctx.arc(p1.x, p1.y, radius, Math.min(a1,a2), Math.max(a1,a2))
+            ctx.stroke()
+            // Label at bisector
+            const bx = vA.x/magA + vB.x/magB
+            const by = vA.y/magA + vB.y/magB
+            const bm = Math.hypot(bx, by) || 1
+            const lx = p1.x + (bx/bm) * (radius + 18)
+            const ly = p1.y + (by/bm) * (radius + 18)
+            ctx.font = `600 13px 'Roboto Mono', monospace`
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+            const tw = ctx.measureText(`${angle}°`).width
+            ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(lx-tw/2-4, ly-9, tw+8, 18)
+            ctx.fillStyle = CYAN; ctx.fillText(`${angle}°`, lx, ly)
+          }
         }
       }
 
-      // Draw angle arc and label at vertex
-      if (pV && pB) {
-        const angleA = Math.atan2(pA.y - pV.y, pA.x - pV.x)
-        const angleB = Math.atan2(pB.y - pV.y, pB.x - pV.x)
-        const radius = Math.min(
-          Math.hypot(pA.x-pV.x, pA.y-pV.y),
-          Math.hypot(pB.x-pV.x, pB.y-pV.y)
-        ) * 0.4
-
-        ctx.beginPath()
-        ctx.arc(pV.x, pV.y, radius, Math.min(angleA,angleB), Math.max(angleA,angleB))
-        ctx.stroke()
-
-        // Calculate angle — only when all 3 points placed
-        const vA = { x: pA.x-pV.x, y: pA.y-pV.y }
-        const vB = { x: pB.x-pV.x, y: pB.y-pV.y }
-        const dot = vA.x*vB.x + vA.y*vB.y
-        const magA = Math.hypot(vA.x, vA.y), magB = Math.hypot(vB.x, vB.y)
-        if (magA < 0.01 || magB < 0.01) { ctx.restore(); break }
-        const angle = Math.round(Math.acos(Math.max(-1,Math.min(1,dot/(magA*magB)))) * 180/Math.PI)
-        if (isNaN(angle)) { ctx.restore(); break }
-
-        // Label — use bisector of the two arm vectors for correct placement
-        const bisectX = (vA.x/magA) + (vB.x/magB)
-        const bisectY = (vA.y/magA) + (vB.y/magB)
-        const bisectMag = Math.hypot(bisectX, bisectY) || 1
-        const lx = pV.x + (bisectX/bisectMag) * (radius + 20)
-        const ly = pV.y + (bisectY/bisectMag) * (radius + 20)
-        ctx.font = `600 13px 'Roboto Mono', monospace`
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-        const tw = ctx.measureText(`${angle}°`).width
-        ctx.fillStyle = 'rgba(0,0,0,0.7)'
-        ctx.fillRect(lx-tw/2-4, ly-9, tw+8, 18)
-        ctx.fillStyle = CYAN
-        ctx.fillText(`${angle}°`, lx, ly)
-      }
-
-      // Draw draggable control points
+      // Control points
       s.pts.forEach((p, i) => {
-        const r2 = 6
-        ctx.beginPath(); ctx.arc(p.x, p.y, r2, 0, Math.PI*2)
-        ctx.fillStyle = i === 1 ? CYAN : 'rgba(0,229,255,0.4)'  // vertex brighter
-        ctx.fill()
+        ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI*2)
+        ctx.fillStyle = i === 1 ? CYAN : 'rgba(0,229,255,0.5)'; ctx.fill()
         ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke()
       })
       break
