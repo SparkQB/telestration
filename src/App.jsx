@@ -32,7 +32,7 @@ async function detectFacesInFrame(videoEl) {
   try {
     // Detect all faces with landmarks
     const detections = await faceapi
-      .detectAllFaces(videoEl, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.35 }))
+      .detectAllFaces(videoEl, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.25 }))
       .withFaceLandmarks()
 
     return detections.map(d => ({
@@ -361,7 +361,7 @@ export default function App() {
   // Face tracking refs
   const trackingRef    = useRef({})    // shapeId -> bool
   const lastDetectRef  = useRef(0)     // timestamp of last detection
-  const DETECT_INTERVAL = 50           // ms between detections (~20fps)
+  const DETECT_INTERVAL = 33           // ms between detections (~30fps)
   const apiAvailable   = useRef(null)  // null=unknown, true/false
   const lastKnownPos   = useRef({})    // shapeId -> {x,y,w,h} last detected position
 
@@ -392,8 +392,9 @@ export default function App() {
 
   const [unlocked, setUnlocked] = useState(isLeadSubmitted())
 
-  const drawing   = useRef(false)
-  const scrubbing  = useRef(false)
+  const drawing      = useRef(false)
+  const scrubbing    = useRef(false)
+  const scrubTrack   = useRef(null)  // ref to custom scrubber track div
   const stroke  = useRef(null)
   const dragSt  = useRef(null)
   const csz     = useRef({ w: 1280, h: 720 })
@@ -607,13 +608,13 @@ export default function App() {
 
       const [tx, ty]   = closest.topLeft
       const [tx2, ty2] = closest.bottomRight
-      const pad = 0.1
+      const pad = 0.22  // 22% padding to better cover full head/hair
       const fw  = (tx2 - tx) * scaleX
       const fh  = (ty2 - ty) * scaleY
       const nx  = tx * scaleX - fw * pad
-      const ny  = ty * scaleY - fh * pad
+      const ny  = ty * scaleY - fh * pad * 1.5  // extra padding on top for hair
       const nw  = fw * (1 + pad * 2)
-      const nh  = fh * (1 + pad * 2)
+      const nh  = fh * (1 + pad * 2.5)  // extra height
 
       updated = true
       return { ...s, x: nx, y: ny, w: nw, h: nh }
@@ -937,6 +938,15 @@ export default function App() {
   function seek(val) {
     const v = vidRef.current; if (!v) return
     v.currentTime = parseFloat(val); setCurrentT(parseFloat(val))
+  }
+
+  function scrubFromPointer(e) {
+    const track = scrubTrack.current; if (!track || !duration) return
+    const r = track.getBoundingClientRect()
+    const clientX = e.touches ? e.touches[0].clientX : (e.clientX ?? 0)
+    const ratio = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
+    const t = ratio * duration
+    seek(t)
   }
 
   function stepFrame(dir) {
