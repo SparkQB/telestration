@@ -66,19 +66,19 @@ async function detectFacesInFrame(videoEl) {
 // Detect face closest to a given canvas point — for tap-to-blur
 async function detectFaceNear(videoEl, tapX, tapY, scaleX, scaleY) {
   const preds = await detectFacesInFrame(videoEl)
+  console.log('[SparkQB] detectFaceNear preds:', preds.length, 'tap:', tapX, tapY, 'scale:', scaleX, scaleY)
   if (!preds.length) return null
+  // Just return the closest face regardless of distance
   let closest = null, minDist = Infinity
   preds.forEach(p => {
     const [fx, fy] = p.topLeft; const [fx2, fy2] = p.bottomRight
     const cx = (fx + fx2) / 2 * scaleX
     const cy = (fy + fy2) / 2 * scaleY
+    console.log('[SparkQB] face center canvas:', cx, cy)
     const dist = Math.hypot(cx - tapX, cy - tapY)
     if (dist < minDist) { minDist = dist; closest = p }
   })
-  // Only return if reasonably close (within 25% of canvas width)
-  const cv = document.querySelector('canvas')
-  if (closest && minDist < (cv?.width || 1000) * 0.35) return closest
-  return null
+  return closest
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
