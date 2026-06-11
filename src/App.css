@@ -539,21 +539,7 @@
 }
 .load-btn:hover { opacity: .88; }
 
-/* ── Track face overlay — sits on the blur box ──────────────────────────── */
-.blur-overlay {
-  position: absolute;
-  z-index: 40;
-  transform: translate(-50%, -50%);
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  background: rgba(16,18,20,0.92);
-  border: 1px solid rgba(178,255,0,0.25);
-  border-radius: 10px;
-  padding: 5px 7px;
-  backdrop-filter: blur(8px);
-  pointer-events: all;
-}
+
 
 .track-btn {
   display: flex;
@@ -899,13 +885,4 @@
 .palette-right .blur-tooltip {
   left: 50%; transform: translateX(-50%);
   top: auto; bottom: calc(100% + 8px);
-}
-
-/* ── Blur loading indicator ─────────────────────────────────────────────── */
-.blur-loading {
-  position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
-  background: rgba(13,15,20,0.9); border: 1px solid var(--border);
-  border-radius: 20px; padding: 8px 16px;
-  font-family: 'Roboto Mono', monospace; font-size: 12px;
-  color: var(--white); white-space: nowrap; z-index: 50;
 }
