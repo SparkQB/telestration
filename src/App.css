@@ -324,10 +324,11 @@
 
 .scrub-wrap {
   flex: 1; min-width: 0; display: flex; align-items: center;
-  padding: 10px 4px; cursor: pointer;
-  touch-action: none; user-select: none;
+  padding: 10px 16px; cursor: pointer;
+  touch-action: pan-y; user-select: none;
   -webkit-user-select: none;
   width: 100%;
+  box-sizing: border-box;
 }
 .scrub-track {
   position: relative; width: 100%; height: 8px;
@@ -497,10 +498,11 @@
   .tb-btn { width: 30px; height: 30px; }
   .pal-btn { width: 34px; height: 34px; }
   .vbar {
-    padding: 4px 6px 6px;
-    gap: 4px;
+    padding: 4px 0 6px;
+    gap: 6px;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: center;
     width: 100%;
     box-sizing: border-box;
   }
@@ -509,8 +511,14 @@
     width: 100%;
     flex: 1 1 100%;
     min-width: 0;
+    padding: 10px 20px;
   }
   .tc { display: none; }
+}
+
+/* iPad */
+@media (max-width: 1024px) and (min-width: 481px) {
+  .scrub-wrap { padding: 10px 20px; }
 }
 
 /* ── Load film button ───────────────────────────────────────────────────── */
