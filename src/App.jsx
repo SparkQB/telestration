@@ -37,20 +37,25 @@ async function getMpFaceDetector() {
 async function detectFacesInFrame(videoEl) {
   try {
     const detector = await getMpFaceDetector()
-    return await new Promise((resolve) => {
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => resolve([]), 3000)
       detector.onResults = (results) => {
+        clearTimeout(timeout)
+        const vw = videoEl.videoWidth || 1
+        const vh = videoEl.videoHeight || 1
         const dets = (results.detections || []).map(d => {
+          // MediaPipe returns normalized coords (0-1) in relativeKeypoints/boundingBox
           const box = d.boundingBox
-          const vw = videoEl.videoWidth || 1
-          const vh = videoEl.videoHeight || 1
-          return {
-            topLeft:     [box.xCenter * vw - box.width * vw / 2, box.yCenter * vh - box.height * vh / 2],
-            bottomRight: [box.xCenter * vw + box.width * vw / 2, box.yCenter * vh + box.height * vh / 2],
-          }
+          // boundingBox has xCenter, yCenter, width, height — all normalized 0-1
+          const x1 = (box.xCenter - box.width / 2) * vw
+          const y1 = (box.yCenter - box.height / 2) * vh
+          const x2 = (box.xCenter + box.width / 2) * vw
+          const y2 = (box.yCenter + box.height / 2) * vh
+          return { topLeft: [x1, y1], bottomRight: [x2, y2] }
         })
         resolve(dets)
       }
-      detector.send({ image: videoEl }).catch(() => resolve([]))
+      detector.send({ image: videoEl }).catch(() => { clearTimeout(timeout); resolve([]) })
     })
   } catch(e) {
     console.warn('[SparkQB] Face detection error:', e)
