@@ -5,80 +5,59 @@ import LeadGate, { isLeadSubmitted } from './LeadGate.jsx'
 import { loadPose, drawPoseOverlay, ANGLE_JOINTS, calcJointAngle } from './pose.js'
 import './App.css'
 
-// ── Face detection — MediaPipe Face Detection ────────────────────────────────
-let mpFaceDetector = null
-let mpFacePromise  = null
+// ── Template matching tracker ────────────────────────────────────────────────
+// Snapshots a region of the bg canvas and tracks it frame-to-frame
+// using sum of absolute differences (SAD) — fast, no ML needed, angle-independent
 
-async function getMpFaceDetector() {
-  if (mpFaceDetector) return mpFaceDetector
-  if (mpFacePromise)  return mpFacePromise
-
-  mpFacePromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/face_detection.js'
-    script.crossOrigin = 'anonymous'
-    script.onload = () => {
-      const detector = new window.FaceDetection({
-        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/${f}`
-      })
-      detector.setOptions({ model: 'short', minDetectionConfidence: 0.5 })
-      detector.onResults = () => {}  // placeholder, overridden per-call
-      detector.initialize().then(() => {
-        mpFaceDetector = detector
-        resolve(detector)
-      }).catch(reject)
-    }
-    script.onerror = reject
-    document.head.appendChild(script)
-  })
-  return mpFacePromise
+function snapshotRegion(bgCanvas, cx, cy, rx, ry) {
+  const x = Math.round(cx - rx), y = Math.round(cy - ry)
+  const w = Math.round(rx * 2),  h = Math.round(ry * 2)
+  if (w < 4 || h < 4) return null
+  const tmp = document.createElement('canvas')
+  tmp.width = w; tmp.height = h
+  tmp.getContext('2d').drawImage(bgCanvas, x, y, w, h, 0, 0, w, h)
+  return { canvas: tmp, x, y, w, h }
 }
 
-async function detectFacesInFrame(videoEl) {
-  try {
-    const detector = await getMpFaceDetector()
-    return await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => resolve([]), 3000)
-      detector.onResults = (results) => {
-        clearTimeout(timeout)
-        const vw = videoEl.videoWidth || 1
-        const vh = videoEl.videoHeight || 1
-        const dets = (results.detections || []).map(d => {
-          // MediaPipe returns normalized coords (0-1) in relativeKeypoints/boundingBox
-          const box = d.boundingBox
-          // boundingBox has xCenter, yCenter, width, height — all normalized 0-1
-          const x1 = (box.xCenter - box.width / 2) * vw
-          const y1 = (box.yCenter - box.height / 2) * vh
-          const x2 = (box.xCenter + box.width / 2) * vw
-          const y2 = (box.yCenter + box.height / 2) * vh
-          return { topLeft: [x1, y1], bottomRight: [x2, y2] }
-        })
-        resolve(dets)
+function findBestMatch(bgCanvas, template, lastCx, lastCy, searchPad) {
+  // Search area around last known position
+  const sx = Math.max(0, Math.round(lastCx - template.w/2 - searchPad))
+  const sy = Math.max(0, Math.round(lastCy - template.h/2 - searchPad))
+  const ex = Math.min(bgCanvas.width  - template.w, sx + template.w + searchPad*2)
+  const ey = Math.min(bgCanvas.height - template.h, sy + template.h + searchPad*2)
+
+  const step = Math.max(2, Math.round(Math.min(template.w, template.h) * 0.15))
+
+  // Get template pixel data (downsampled for speed)
+  const tCtx = template.canvas.getContext('2d')
+  const tData = tCtx.getImageData(0, 0, template.w, template.h).data
+
+  // Sample the search area
+  const searchCtx = bgCanvas.getContext('2d')
+  let bestSAD = Infinity, bestX = lastCx, bestY = lastCy
+
+  for (let ty = sy; ty <= ey; ty += step) {
+    for (let tx = sx; tx <= ex; tx += step) {
+      const patch = searchCtx.getImageData(tx, ty, template.w, template.h).data
+      let sad = 0
+      // Sample every 4th pixel for speed
+      for (let i = 0; i < tData.length; i += 16) {
+        sad += Math.abs(tData[i] - patch[i])
+        sad += Math.abs(tData[i+1] - patch[i+1])
+        sad += Math.abs(tData[i+2] - patch[i+2])
       }
-      detector.send({ image: videoEl }).catch(() => { clearTimeout(timeout); resolve([]) })
-    })
-  } catch(e) {
-    console.warn('[SparkQB] Face detection error:', e)
-    return []
+      if (sad < bestSAD) {
+        bestSAD = sad
+        bestX = tx + template.w/2
+        bestY = ty + template.h/2
+      }
+    }
   }
-}
 
-// Detect face closest to a given canvas point — for tap-to-blur
-async function detectFaceNear(videoEl, tapX, tapY, scaleX, scaleY) {
-  const preds = await detectFacesInFrame(videoEl)
-  console.log('[SparkQB] detectFaceNear preds:', preds.length, 'tap:', tapX, tapY, 'scale:', scaleX, scaleY)
-  if (!preds.length) return null
-  // Just return the closest face regardless of distance
-  let closest = null, minDist = Infinity
-  preds.forEach(p => {
-    const [fx, fy] = p.topLeft; const [fx2, fy2] = p.bottomRight
-    const cx = (fx + fx2) / 2 * scaleX
-    const cy = (fy + fy2) / 2 * scaleY
-    console.log('[SparkQB] face center canvas:', cx, cy)
-    const dist = Math.hypot(cx - tapX, cy - tapY)
-    if (dist < minDist) { minDist = dist; closest = p }
-  })
-  return closest
+  // Normalize SAD — if too high, match is unreliable, hold position
+  const maxSAD = tData.length / 16 * 255 * 3
+  const confidence = 1 - bestSAD / maxSAD
+  return { cx: bestX, cy: bestY, confidence }
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -385,8 +364,9 @@ export default function App() {
   const trackingRef    = useRef({})    // shapeId -> bool
   const lastDetectRef  = useRef(0)     // timestamp of last detection
   const DETECT_INTERVAL = 33           // ms between detections (~30fps)
-  const apiAvailable   = useRef(null)  // null=unknown, true/false
-  const lastKnownPos   = useRef({})    // shapeId -> {x,y,w,h} last detected position
+  const templateRef    = useRef({})    // shapeId -> snapshot canvas for template matching
+  const apiAvailable   = useRef(null)
+  const lastKnownPos   = useRef({})
 
   const hist = useHistory([])
   const { shapes, push, undo, redo, canUndo, canRedo } = hist
@@ -568,7 +548,7 @@ export default function App() {
       const hasTracked = Object.values(trackingRef.current).some(Boolean)
       if (hasTracked && ts - lastDetectRef.current > DETECT_INTERVAL) {
         lastDetectRef.current = ts
-        detectAndUpdateBlurs() // intentionally NOT awaited
+        detectAndUpdateBlurs()
       }
 
       // Fire pose detection in background
@@ -583,59 +563,24 @@ export default function App() {
     return () => cancelAnimationFrame(rafRef.current)
   }, [videoMeta, renderBg])
 
-  // ── Face detection ────────────────────────────────────────────────────────────
-  async function detectAndUpdateBlurs() {
-    if (!vidRef.current) return
+  // ── Template matching tracker ────────────────────────────────────────────────
+  function detectAndUpdateBlurs() {
     const cv = bgRef.current; if (!cv) return
-
-    const scaleX = cv.width  / (vidRef.current.videoWidth  || cv.width)
-    const scaleY = cv.height / (vidRef.current.videoHeight || cv.height)
-
-    let preds = []
-    try {
-      preds = await detectFacesInFrame(vidRef.current)
-      if (apiAvailable.current === null) {
-        apiAvailable.current = true
-        setTfStatus('ready')
-      }
-    } catch(e) {
-      apiAvailable.current = false
-      setTfStatus('error')
-      return
-    }
-
     const currentShapes = shapesRef.current
     let updated = false
+    const searchPad = Math.round(cv.width * 0.12) // search 12% of frame width around last pos
 
     const newShapes = currentShapes.map(s => {
       if (s.type !== 'blur' || !trackingRef.current[s.id]) return s
+      const tmpl = templateRef.current[s.id]
+      if (!tmpl) return s
 
-      // Find closest detected face to current circle center
-      let closest = null, minDist = Infinity
-      preds.forEach(p => {
-        const [fx, fy]   = p.topLeft
-        const [fx2, fy2] = p.bottomRight
-        const fcx = (fx + fx2) / 2 * scaleX
-        const fcy = (fy + fy2) / 2 * scaleY
-        const dist = Math.hypot(fcx - s.cx, fcy - s.cy)
-        if (dist < minDist) { minDist = dist; closest = p }
-      })
-
-      // No face detected — hold last known position (don't jump)
-      if (!closest) return s
-
-      const [tx, ty]   = closest.topLeft
-      const [tx2, ty2] = closest.bottomRight
-      const pad = 0.35
-      const fw  = (tx2 - tx) * scaleX
-      const fh  = (ty2 - ty) * scaleY
-      const ncx = (tx + (tx2-tx)/2) * scaleX
-      const ncy = (ty + (ty2-ty)/2) * scaleY
-      const nrx = fw / 2 * (1 + pad)
-      const nry = fh / 2 * (1 + pad * 1.5)
+      const { cx, cy, confidence } = findBestMatch(cv, tmpl, s.cx, s.cy, searchPad)
+      // If confidence too low hold last position
+      if (confidence < 0.3) return s
 
       updated = true
-      return { ...s, cx: ncx, cy: ncy, rx: nrx, ry: nry }
+      return { ...s, cx, cy }
     })
 
     if (updated) {
@@ -700,34 +645,7 @@ export default function App() {
     }
   }
 
-  // Tap-to-blur — detect face at tap position and create blur circle
-  async function tapToBlur(tapX, tapY) {
-    if (!vidRef.current || !bgRef.current) return
-    setTfStatus('loading')
-    const cv = bgRef.current
-    const scaleX = cv.width  / (vidRef.current.videoWidth  || cv.width)
-    const scaleY = cv.height / (vidRef.current.videoHeight || cv.height)
-    try {
-      const face = await detectFaceNear(vidRef.current, tapX, tapY, scaleX, scaleY)
-      if (!face) { setTfStatus('idle'); alert('No face detected near tap. Try tapping closer to the face.'); return }
-      const [fx, fy] = face.topLeft; const [fx2, fy2] = face.bottomRight
-      const pad = 0.35
-      const fw = (fx2 - fx) * scaleX; const fh = (fy2 - fy) * scaleY
-      const cx = (fx + (fx2-fx)/2) * scaleX
-      const cy = (fy + (fy2-fy)/2) * scaleY
-      const rx = fw / 2 * (1 + pad)
-      const ry = fh / 2 * (1 + pad * 1.5)
-      const id = uid()
-      const newShape = { id, type: 'blur', cx, cy, rx, ry }
-      trackingRef.current = { ...trackingRef.current, [id]: true }
-      setTracking({ ...trackingRef.current })
-      push([...shapesRef.current, newShape])
-      setTfStatus('ready')
-    } catch(e) {
-      console.error('[SparkQB] tapToBlur error:', e)
-      setTfStatus('error')
-    }
-  }
+
 
   // ── Pointer events ────────────────────────────────────────────────────────────
   function onDown(e) {
@@ -802,14 +720,13 @@ export default function App() {
       return
     }
 
-    if (tool==='blur') { tapToBlur(pos.x, pos.y); return }
-
     drawing.current = true
     if (tool==='pen') stroke.current = { id:uid(), type:'pen', pts:[pos], ...ts }
     else if (tool==='line')   stroke.current = { id:uid(), type:'line',   x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
     else if (tool==='arrow')  stroke.current = { id:uid(), type:'arrow',  x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
     else if (tool==='circle') stroke.current = { id:uid(), type:'circle', cx:pos.x, cy:pos.y, r:0, ...ts }
     else if (tool==='rect')   stroke.current = { id:uid(), type:'rect',   x:pos.x, y:pos.y, w:0, h:0, ...ts }
+    else if (tool==='blur')   stroke.current = { id:uid(), type:'blur',   cx:pos.x, cy:pos.y, rx:0, ry:0 }
   }
 
   function onMove(e) {
@@ -849,13 +766,27 @@ export default function App() {
     else if (s.type==='line')   { s.x2=pos.x; s.y2=pos.y }
     else if (s.type==='arrow')  { s.x2=pos.x; s.y2=pos.y }
     else if (s.type==='circle') s.r = Math.hypot(pos.x-s.cx, pos.y-s.cy)
-    else if (s.type==='rect'||s.type==='blur') { s.w=pos.x-s.x; s.h=pos.y-s.y }
+    else if (s.type==='rect') { s.w=pos.x-s.x; s.h=pos.y-s.y }
+    else if (s.type==='blur') {
+      const r = Math.hypot(pos.x-s.cx, pos.y-s.cy)
+      s.rx = r; s.ry = r
+    }
 
-    // Draw live preview on overlay canvas so it's visible while drawing
+    // Draw live preview on overlay canvas
     const oc = ovRef.current; if (!oc) return
     const octx = oc.getContext('2d')
     octx.clearRect(0, 0, oc.width, oc.height)
-    renderShape(octx, s, false)
+    if (s.type === 'blur') {
+      // Show dashed circle outline while drawing
+      octx.save()
+      octx.strokeStyle = '#B2FF00'; octx.lineWidth = 2
+      octx.setLineDash([6, 4])
+      octx.beginPath(); octx.arc(s.cx, s.cy, s.rx || 1, 0, Math.PI*2); octx.stroke()
+      octx.setLineDash([])
+      octx.restore()
+    } else {
+      renderShape(octx, s, false)
+    }
   }
 
   function onUp(e) {
@@ -892,12 +823,29 @@ export default function App() {
       : s.type==='line'   ? Math.hypot(s.x2-s.x1,s.y2-s.y1)>8
       : s.type==='arrow'  ? Math.hypot(s.x2-s.x1,s.y2-s.y1)>8
       : s.type==='circle' ? s.r>5
-      : (s.type==='rect'||s.type==='blur') ? Math.abs(s.w)>10&&Math.abs(s.h)>10 : false
-    if (valid) push([...shapes, s])
+      : s.type==='rect' ? Math.abs(s.w)>10&&Math.abs(s.h)>10
+      : s.type==='blur' ? s.rx > 10 : false
+    if (valid) {
+      const committed = s.type === 'blur' ? commitBlur(s) : s
+      push([...shapes, committed])
+    }
     else renderShapes(shapes, null, selId, trackingRef.current)
   }
 
   // ── Text / label ──────────────────────────────────────────────────────────────
+  // Called when a blur shape is committed — expand by padding and snapshot for tracking
+  function commitBlur(s) {
+    const PAD = 0.25
+    const expanded = { ...s, rx: s.rx * (1 + PAD), ry: s.ry * (1 + PAD) }
+    const snap = snapshotRegion(bgRef.current, expanded.cx, expanded.cy, expanded.rx, expanded.ry)
+    if (snap) {
+      templateRef.current[expanded.id] = snap
+      trackingRef.current = { ...trackingRef.current, [expanded.id]: true }
+      setTracking({ ...trackingRef.current })
+    }
+    return expanded
+  }
+
   function commitTxt() {
     if (!pendingTxt || !txtVal.trim()) { setPendingTxt(null); return }
     push([...shapes, { id:uid(), type:'text', x:pendingTxt.x, y:pendingTxt.y, text:txtVal, fs:22,
@@ -1191,12 +1139,12 @@ export default function App() {
           {TOOLS.map(t => (
             <div key={t.id} className="pal-item">
               <button className={`pal-btn ${tool===t.id?'active':''} ${t.id==='blur'?'pal-btn-text':''}`}
-                title={t.id === 'blur' ? 'Tap face to blur' : t.label}
+                title={t.id === 'blur' ? 'Draw circle to blur face' : t.label}
                 onClick={() => handleToolClick(t.id)}>
                 {t.icon ? <I d={t.icon} size={20}/> : <span className="pal-text-label">{t.label}</span>}
               </button>
               {tool === t.id && t.id === 'blur' && (
-                <div className="blur-tooltip">Tap face to blur</div>
+                <div className="blur-tooltip">Draw circle around face</div>
               )}
               {popover === t.id && tool === t.id && (
                 <div className={`tool-popover ${isPortrait ? 'pop-left' : 'pop-top'}`}
@@ -1263,12 +1211,7 @@ export default function App() {
           ))}
         </div>
 
-        {/* Blur loading indicator */}
-        {tfStatus === 'loading' && (
-          <div className="blur-loading">
-            <span className="spin">⟳</span> Detecting face…
-          </div>
-        )}
+
 
         {/* Inline text input */}
         {pendingTxt && (() => {
@@ -1309,7 +1252,12 @@ export default function App() {
         {selId && !selectedIsBlur && (
           <button className="del-btn"
             onPointerDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); push(shapes.filter(s => s.id !== selId)); setSelId(null) }}>
+            onClick={e => {
+              e.stopPropagation()
+              delete templateRef.current[selId]
+              delete trackingRef.current[selId]
+              push(shapes.filter(s => s.id !== selId)); setSelId(null)
+            }}>
             <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={14}/> Delete
           </button>
         )}
