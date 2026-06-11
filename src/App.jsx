@@ -1330,9 +1330,20 @@ export default function App() {
           </button>
           <button className="vb" onClick={() => stepFrame(1)}   title="+1 frame"><I d="M9 5l7 7-7 7" size={15}/></button>
           <button className="vb" onClick={() => stepFrame(10)}  title="+10 frames"><I d="M5 4l10 8-10 8V4zM19 4v16" size={15}/></button>
-          <div className="scrub-wrap">
-            <input type="range" className="scrub" min={0} max={duration} step={1/(videoMeta.fps||30)/2}
-              value={currentT} onChange={e => seek(e.target.value)}/>
+          <div className="scrub-wrap" ref={scrubTrack}
+            onPointerDown={e => {
+              e.currentTarget.setPointerCapture(e.pointerId)
+              scrubbing.current = true
+              scrubFromPointer(e)
+            }}
+            onPointerMove={e => { if (scrubbing.current) scrubFromPointer(e) }}
+            onPointerUp={e => { scrubbing.current = false; scrubFromPointer(e) }}
+            onPointerCancel={() => { scrubbing.current = false }}
+          >
+            <div className="scrub-track">
+              <div className="scrub-fill" style={{ width: `${duration ? (currentT/duration)*100 : 0}%` }}/>
+              <div className="scrub-thumb" style={{ left: `${duration ? (currentT/duration)*100 : 0}%` }}/>
+            </div>
           </div>
           <button className="speed-btn" onClick={cycleSpeed}>{SPEEDS[speedIdx]}×</button>
           <span className="tc">{fmt(currentT)}</span>
