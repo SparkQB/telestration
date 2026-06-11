@@ -5,46 +5,75 @@ import LeadGate, { isLeadSubmitted } from './LeadGate.jsx'
 import { loadPose, drawPoseOverlay, ANGLE_JOINTS, calcJointAngle } from './pose.js'
 import './App.css'
 
-// ── Face detection — face-api.js (Safari compatible, self-hosted) ────────────
-let faceApiPromise = null
+// ── Face detection — MediaPipe Face Detection ────────────────────────────────
+let mpFaceDetector = null
+let mpFacePromise  = null
 
-function getFaceApi() {
-  if (!faceApiPromise) {
-    faceApiPromise = import('face-api.js').then(async (faceapi) => {
-      const base = window.location.origin + '/faceapi'
-      console.log('[SparkQB] Loading face-api.js models from:', base)
+async function getMpFaceDetector() {
+  if (mpFaceDetector) return mpFaceDetector
+  if (mpFacePromise)  return mpFacePromise
 
-      // Load detection + landmark models in parallel
-      await Promise.all([
-        faceapi.nets.ssdMobilenetv1.loadFromUri(base),
-        faceapi.nets.faceLandmark68Net.loadFromUri(base),
-      ])
-
-      console.log('[SparkQB] face-api.js models ready')
-      return faceapi
-    })
-  }
-  return faceApiPromise
+  mpFacePromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/face_detection.js'
+    script.crossOrigin = 'anonymous'
+    script.onload = () => {
+      const detector = new window.FaceDetection({
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/${f}`
+      })
+      detector.setOptions({ model: 'short', minDetectionConfidence: 0.5 })
+      detector.onResults = () => {}  // placeholder, overridden per-call
+      detector.initialize().then(() => {
+        mpFaceDetector = detector
+        resolve(detector)
+      }).catch(reject)
+    }
+    script.onerror = reject
+    document.head.appendChild(script)
+  })
+  return mpFacePromise
 }
 
 async function detectFacesInFrame(videoEl) {
-  const faceapi = await getFaceApi()
   try {
-    // Detect all faces with landmarks
-    const detections = await faceapi
-      .detectAllFaces(videoEl, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.25 }))
-      .withFaceLandmarks()
-
-    return detections.map(d => ({
-      topLeft:     [d.detection.box.x,                      d.detection.box.y],
-      bottomRight: [d.detection.box.x + d.detection.box.width,
-                    d.detection.box.y + d.detection.box.height],
-      landmarks:   d.landmarks.positions.map(p => ({ x: p.x, y: p.y })),
-    }))
+    const detector = await getMpFaceDetector()
+    return await new Promise((resolve) => {
+      detector.onResults = (results) => {
+        const dets = (results.detections || []).map(d => {
+          const box = d.boundingBox
+          const vw = videoEl.videoWidth || 1
+          const vh = videoEl.videoHeight || 1
+          return {
+            topLeft:     [box.xCenter * vw - box.width * vw / 2, box.yCenter * vh - box.height * vh / 2],
+            bottomRight: [box.xCenter * vw + box.width * vw / 2, box.yCenter * vh + box.height * vh / 2],
+          }
+        })
+        resolve(dets)
+      }
+      detector.send({ image: videoEl }).catch(() => resolve([]))
+    })
   } catch(e) {
-    console.warn('[SparkQB] Detection error:', e)
+    console.warn('[SparkQB] Face detection error:', e)
     return []
   }
+}
+
+// Detect face closest to a given canvas point — for tap-to-blur
+async function detectFaceNear(videoEl, tapX, tapY, scaleX, scaleY) {
+  const preds = await detectFacesInFrame(videoEl)
+  if (!preds.length) return null
+  let closest = null, minDist = Infinity
+  preds.forEach(p => {
+    const [fx, fy] = p.topLeft; const [fx2, fy2] = p.bottomRight
+    const cx = (fx + fx2) / 2 * scaleX
+    const cy = (fy + fy2) / 2 * scaleY
+    const dist = Math.hypot(cx - tapX, cy - tapY)
+    if (dist < minDist) { minDist = dist; closest = p }
+  })
+  // Only return if reasonably close (within 25% of canvas width)
+  const cv = document.querySelector('canvas')
+  if (closest && minDist < (cv?.width || 1000) * 0.35) return closest
+  return null
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -280,38 +309,26 @@ function renderShape(ctx, s, selected = false) {
   ctx.restore()
 }
 
-// ── Pixelate blur region ──────────────────────────────────────────────────────
-function renderPixelate(drCtx, bgCanvas, x, y, w, h, selected, tracking) {
-  if (w < 4 || h < 4) return
-  const blockSize = 8
-  const tmp = document.createElement('canvas')
-  tmp.width = w; tmp.height = h
-  const tctx = tmp.getContext('2d')
-  tctx.drawImage(bgCanvas, x, y, w, h, 0, 0, w, h)
-
-  const small = document.createElement('canvas')
-  small.width  = Math.max(1, Math.round(w / blockSize))
-  small.height = Math.max(1, Math.round(h / blockSize))
-  const sctx = small.getContext('2d')
-  sctx.imageSmoothingEnabled = false
-  sctx.drawImage(tmp, 0, 0, small.width, small.height)
-
+// ── Gaussian blur circle ─────────────────────────────────────────────────────
+function renderFaceBlur(drCtx, bgCanvas, cx, cy, rx, ry) {
+  if (rx < 4 || ry < 4) return
   drCtx.save()
-  drCtx.imageSmoothingEnabled = false
-  drCtx.drawImage(small, x, y, w, h)
-  drCtx.fillStyle = 'rgba(16,18,20,0.28)'
-  drCtx.fillRect(x, y, w, h)
 
-  // only show border when selected, nothing when tracking
-  if (selected) {
-    drCtx.setLineDash([4,4])
-    drCtx.strokeStyle = '#B2FF00'
-    drCtx.lineWidth = 1.5
-    drCtx.shadowColor = '#B2FF00'
-    drCtx.shadowBlur = 8
-    drCtx.strokeRect(x, y, w, h)
-    drCtx.setLineDash([])
-  }
+  // Clip to ellipse
+  drCtx.beginPath()
+  drCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+  drCtx.clip()
+
+  // Draw blurred image using CSS filter
+  drCtx.filter = 'blur(18px)'
+  drCtx.drawImage(bgCanvas, 0, 0)
+  drCtx.filter = 'none'
+
+  // Subtle dark overlay to make blur more obvious
+  drCtx.fillStyle = 'rgba(0,0,0,0.15)'
+  drCtx.beginPath()
+  drCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+  drCtx.fill()
 
   drCtx.restore()
 }
@@ -321,7 +338,8 @@ function bounds(s) {
   switch (s.type) {
     case 'player-o': case 'player-x': return { x:s.x-(s.r||20), y:s.y-(s.r||20), w:(s.r||20)*2, h:(s.r||20)*2 }
     case 'circle': return { x:s.cx-s.r, y:s.cy-s.r, w:s.r*2, h:s.r*2 }
-    case 'rect': case 'blur': return { x:Math.min(s.x,s.x+s.w), y:Math.min(s.y,s.y+s.h), w:Math.abs(s.w), h:Math.abs(s.h) }
+    case 'rect': return { x:Math.min(s.x,s.x+s.w), y:Math.min(s.y,s.y+s.h), w:Math.abs(s.w), h:Math.abs(s.h) }
+    case 'blur': return { x: s.cx-s.rx, y: s.cy-s.ry, w: s.rx*2, h: s.ry*2 }
     case 'arrow': return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) }
     case 'text':  return { x:s.x, y:s.y-(s.fs||28), w:120, h:(s.fs||28)+8 }
     case 'line': return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) }
@@ -515,14 +533,12 @@ export default function App() {
     const tm = trackMap ?? trackingRef.current
     list.forEach(s => {
       if (s.type === 'blur') {
-        const b = bounds(s)
-        if (b) renderPixelate(ctx, bg, b.x, b.y, b.w, b.h, s.id === sel, !!tm[s.id])
+        renderFaceBlur(ctx, bg, s.cx, s.cy, s.rx, s.ry)
       } else renderShape(ctx, s, s.id === sel)
     })
     if (active) {
       if (active.type === 'blur') {
-        const b = bounds(active)
-        if (b) renderPixelate(ctx, bg, b.x, b.y, b.w, b.h, false, false)
+        renderFaceBlur(ctx, bg, active.cx, active.cy, active.rx, active.ry)
       } else renderShape(ctx, active, false)
     }
   }, [])
@@ -589,35 +605,32 @@ export default function App() {
     const newShapes = currentShapes.map(s => {
       if (s.type !== 'blur' || !trackingRef.current[s.id]) return s
 
-      const cx = Math.min(s.x, s.x + s.w) + Math.abs(s.w) / 2
-      const cy = Math.min(s.y, s.y + s.h) + Math.abs(s.h) / 2
-
-      // Find closest detected face to current box center
+      // Find closest detected face to current circle center
       let closest = null, minDist = Infinity
       preds.forEach(p => {
         const [fx, fy]   = p.topLeft
         const [fx2, fy2] = p.bottomRight
         const fcx = (fx + fx2) / 2 * scaleX
         const fcy = (fy + fy2) / 2 * scaleY
-        const dist = Math.hypot(fcx - cx, fcy - cy)
+        const dist = Math.hypot(fcx - s.cx, fcy - s.cy)
         if (dist < minDist) { minDist = dist; closest = p }
       })
 
-      // No face detected — hide box (return unchanged, won't render differently)
+      // No face detected — hold last known position (don't jump)
       if (!closest) return s
 
       const [tx, ty]   = closest.topLeft
       const [tx2, ty2] = closest.bottomRight
-      const pad = 0.22  // 22% padding to better cover full head/hair
+      const pad = 0.35
       const fw  = (tx2 - tx) * scaleX
       const fh  = (ty2 - ty) * scaleY
-      const nx  = tx * scaleX - fw * pad
-      const ny  = ty * scaleY - fh * pad * 1.5  // extra padding on top for hair
-      const nw  = fw * (1 + pad * 2)
-      const nh  = fh * (1 + pad * 2.5)  // extra height
+      const ncx = (tx + (tx2-tx)/2) * scaleX
+      const ncy = (ty + (ty2-ty)/2) * scaleY
+      const nrx = fw / 2 * (1 + pad)
+      const nry = fh / 2 * (1 + pad * 1.5)
 
       updated = true
-      return { ...s, x: nx, y: ny, w: nw, h: nh }
+      return { ...s, cx: ncx, cy: ncy, rx: nrx, ry: nry }
     })
 
     if (updated) {
@@ -682,28 +695,33 @@ export default function App() {
     }
   }
 
-  // Toggle tracking on a blur shape
-  async function toggleTracking(shapeId) {
-    const already = trackingRef.current[shapeId]
-    if (already) {
-      trackingRef.current = { ...trackingRef.current, [shapeId]: false }
-      delete lastKnownPos.current[shapeId]
-      setTracking({ ...trackingRef.current })
-      return
-    }
+  // Tap-to-blur — detect face at tap position and create blur circle
+  async function tapToBlur(tapX, tapY) {
+    if (!vidRef.current || !bgRef.current) return
     setTfStatus('loading')
+    const cv = bgRef.current
+    const scaleX = cv.width  / (vidRef.current.videoWidth  || cv.width)
+    const scaleY = cv.height / (vidRef.current.videoHeight || cv.height)
     try {
-      await getFaceApi()  // preload — shows spinner while loading
+      const face = await detectFaceNear(vidRef.current, tapX, tapY, scaleX, scaleY)
+      if (!face) { setTfStatus('idle'); alert('No face detected near tap. Try tapping closer to the face.'); return }
+      const [fx, fy] = face.topLeft; const [fx2, fy2] = face.bottomRight
+      const pad = 0.35
+      const fw = (fx2 - fx) * scaleX; const fh = (fy2 - fy) * scaleY
+      const cx = (fx + (fx2-fx)/2) * scaleX
+      const cy = (fy + (fy2-fy)/2) * scaleY
+      const rx = fw / 2 * (1 + pad)
+      const ry = fh / 2 * (1 + pad * 1.5)
+      const id = uid()
+      const newShape = { id, type: 'blur', cx, cy, rx, ry }
+      trackingRef.current = { ...trackingRef.current, [id]: true }
+      setTracking({ ...trackingRef.current })
+      push([...shapesRef.current, newShape])
       setTfStatus('ready')
     } catch(e) {
-      console.error('[SparkQB] Model load failed:', e)
+      console.error('[SparkQB] tapToBlur error:', e)
       setTfStatus('error')
-      alert('Could not load face tracking model. Make sure you have run download-model.js and committed the files to GitHub.')
-      return
     }
-    trackingRef.current = { ...trackingRef.current, [shapeId]: true }
-    setTracking({ ...trackingRef.current })
-    await detectAndUpdateBlurs()
   }
 
   // ── Pointer events ────────────────────────────────────────────────────────────
@@ -779,13 +797,14 @@ export default function App() {
       return
     }
 
+    if (tool==='blur') { tapToBlur(pos.x, pos.y); return }
+
     drawing.current = true
     if (tool==='pen') stroke.current = { id:uid(), type:'pen', pts:[pos], ...ts }
     else if (tool==='line')   stroke.current = { id:uid(), type:'line',   x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
     else if (tool==='arrow')  stroke.current = { id:uid(), type:'arrow',  x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
     else if (tool==='circle') stroke.current = { id:uid(), type:'circle', cx:pos.x, cy:pos.y, r:0, ...ts }
     else if (tool==='rect')   stroke.current = { id:uid(), type:'rect',   x:pos.x, y:pos.y, w:0, h:0, ...ts }
-    else if (tool==='blur')   stroke.current = { id:uid(), type:'blur',   x:pos.x, y:pos.y, w:0, h:0 }
   }
 
   function onMove(e) {
@@ -1030,12 +1049,6 @@ export default function App() {
   const selectedShape = shapes.find(s => s.id === selId)
   const selectedIsBlur = selectedShape?.type === 'blur'
 
-  // Also show track UI when blur tool is active and hovering over a blur shape
-  // Find the most recently placed blur shape to show controls on
-  const activeBlurId = selectedIsBlur ? selId :
-    (tool === 'blur' ? shapes.filter(s => s.type === 'blur').slice(-1)[0]?.id : null)
-  const activeBlurShape = shapes.find(s => s.id === activeBlurId)
-
   if (!unlocked) return <LeadGate onUnlock={() => setUnlocked(true)} />
 
   return (
@@ -1173,9 +1186,13 @@ export default function App() {
           {TOOLS.map(t => (
             <div key={t.id} className="pal-item">
               <button className={`pal-btn ${tool===t.id?'active':''} ${t.id==='blur'?'pal-btn-text':''}`}
-                title={t.label} onClick={() => handleToolClick(t.id)}>
+                title={t.id === 'blur' ? 'Tap face to blur' : t.label}
+                onClick={() => handleToolClick(t.id)}>
                 {t.icon ? <I d={t.icon} size={20}/> : <span className="pal-text-label">{t.label}</span>}
               </button>
+              {tool === t.id && t.id === 'blur' && (
+                <div className="blur-tooltip">Tap face to blur</div>
+              )}
               {popover === t.id && tool === t.id && (
                 <div className={`tool-popover ${isPortrait ? 'pop-left' : 'pop-top'}`}
                   onClick={e => e.stopPropagation()}>
@@ -1241,39 +1258,12 @@ export default function App() {
           ))}
         </div>
 
-        {/* Track face overlay — sits directly on the blur box */}
-        {activeBlurShape && (() => {
-          const b = bounds(activeBlurShape)
-          if (!b || !bgRef.current) return null
-          const cw = bgRef.current.width
-          const ch = bgRef.current.height
-          // Center of the blur box in % of canvas
-          const cx = ((b.x + b.w / 2) / cw * 100)
-          const cy = ((b.y + b.h / 2) / ch * 100)
-          return (
-            <div className="blur-overlay"
-              style={{ left: cx + '%', top: cy + '%' }}
-              onClick={e => e.stopPropagation()}>
-              <button
-                className={`track-btn ${tracking[activeBlurId] ? 'tracking' : ''}`}
-                onClick={() => toggleTracking(activeBlurId)}
-                disabled={tfStatus === 'loading'}
-              >
-                {tfStatus === 'loading' ? (
-                  <><span className="spin">⟳</span> LOADING…</>
-                ) : tracking[selId] ? (
-                  <><I d="M6 18L18 6M6 6l12 12" size={13}/> STOP</>
-                ) : (
-                  <><I d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM12 8v4l3 3" size={13}/> TRACK FACE</>
-                )}
-              </button>
-              <button className="del-btn-inline"
-                onClick={() => { push(shapes.filter(s => s.id !== activeBlurId)); delete trackingRef.current[activeBlurId]; setTracking({...trackingRef.current}); setSelId(null) }}>
-                <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={13}/>
-              </button>
-            </div>
-          )
-        })()}
+        {/* Blur loading indicator */}
+        {tfStatus === 'loading' && (
+          <div className="blur-loading">
+            <span className="spin">⟳</span> Detecting face…
+          </div>
+        )}
 
         {/* Inline text input */}
         {pendingTxt && (() => {
