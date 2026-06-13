@@ -294,26 +294,103 @@ function renderShape(ctx, s, selected = false) {
 }
 
 // ── Gaussian blur circle ─────────────────────────────────────────────────────
+// ── Stack blur — pure JS, works on all browsers including Safari ──────────────
+function stackBlur(pixels, width, height, radius) {
+  const div = 2 * radius + 1
+  const widthMinus1 = width - 1
+  const heightMinus1 = height - 1
+  const radiusPlus1 = radius + 1
+  const sumFactor = radiusPlus1 * (radiusPlus1 + 1) / 2
+
+  const r = new Int32Array(width * height)
+  const g = new Int32Array(width * height)
+  const b = new Int32Array(width * height)
+
+  let rSum, gSum, bSum, x, y, i, p, p1, p2, yp, yi, yw
+  let rInSum, gInSum, bInSum, rOutSum, gOutSum, bOutSum
+
+  yw = yi = 0
+  for (y = 0; y < height; y++) {
+    rInSum = gInSum = bInSum = rOutSum = gOutSum = bOutSum = rSum = gSum = bSum = 0
+    for (i = -radius; i <= radius; i++) {
+      p = (yi + Math.min(widthMinus1, Math.max(0, i))) * 4
+      const wt = radiusPlus1 - Math.abs(i)
+      rSum += pixels[p]   * wt; gSum += pixels[p+1] * wt; bSum += pixels[p+2] * wt
+      if (i > 0) { rInSum += pixels[p]; gInSum += pixels[p+1]; bInSum += pixels[p+2] }
+      else       { rOutSum+= pixels[p]; gOutSum+= pixels[p+1]; bOutSum+= pixels[p+2] }
+    }
+    let xp = 1
+    for (x = 0; x < width; x++) {
+      r[yi] = rSum / sumFactor | 0
+      g[yi] = gSum / sumFactor | 0
+      b[yi] = bSum / sumFactor | 0
+      rSum -= rOutSum; gSum -= gOutSum; bSum -= bOutSum
+      p1 = (yw + Math.min(widthMinus1, xp + radius)) * 4
+      p2 = (yw + Math.max(0, x - radius)) * 4
+      rOutSum -= pixels[p2];   gOutSum -= pixels[p2+1]; bOutSum -= pixels[p2+2]
+      rInSum  += pixels[p1];   gInSum  += pixels[p1+1]; bInSum  += pixels[p1+2]
+      rSum += rInSum; gSum += gInSum; bSum += bInSum
+      rOutSum += r[yi]; gOutSum += g[yi]; bOutSum += b[yi]
+      rInSum  -= r[yi]; gInSum  -= g[yi]; bInSum  -= b[yi]
+      yi++; xp = Math.min(xp + 1, widthMinus1)
+    }
+    yw += width
+  }
+
+  for (x = 0; x < width; x++) {
+    rInSum = gInSum = bInSum = rOutSum = gOutSum = bOutSum = rSum = gSum = bSum = 0
+    yp = -radius * width
+    for (i = -radius; i <= radius; i++) {
+      yi = Math.max(0, yp) + x
+      const wt = radiusPlus1 - Math.abs(i)
+      rSum += r[yi] * wt; gSum += g[yi] * wt; bSum += b[yi] * wt
+      if (i > 0) { rInSum += r[yi]; gInSum += g[yi]; bInSum += b[yi] }
+      else       { rOutSum+= r[yi]; gOutSum+= g[yi]; bOutSum+= b[yi] }
+      if (i < heightMinus1) yp += width
+    }
+    yi = x
+    let yp2 = radiusPlus1 * width
+    for (y = 0; y < height; y++) {
+      const idx = yi * 4
+      pixels[idx]   = rSum / sumFactor | 0
+      pixels[idx+1] = gSum / sumFactor | 0
+      pixels[idx+2] = bSum / sumFactor | 0
+      rSum -= rOutSum; gSum -= gOutSum; bSum -= bOutSum
+      const p1y = x + Math.min(heightMinus1, y + radiusPlus1) * width
+      const p2y = x + Math.max(0, y - radius) * width
+      rOutSum -= r[p2y]; gOutSum -= g[p2y]; bOutSum -= b[p2y]
+      rInSum  += r[p1y]; gInSum  += g[p1y]; bInSum  += b[p1y]
+      rSum += rInSum; gSum += gInSum; bSum += bInSum
+      rOutSum += r[yi]; gOutSum += g[yi]; bOutSum += b[yi]
+      rInSum  -= r[yi]; gInSum  -= g[yi]; bInSum  -= b[yi]
+      yi += width
+    }
+  }
+}
+
 function renderFaceBlur(drCtx, bgCanvas, cx, cy, rx, ry) {
   if (rx < 4 || ry < 4) return
-  drCtx.save()
+  const x = Math.round(cx - rx), y = Math.round(cy - ry)
+  const w = Math.round(rx * 2),  h = Math.round(ry * 2)
+  if (w < 4 || h < 4) return
 
-  // Clip to ellipse
+  // Extract region from bg canvas
+  const tmp = document.createElement('canvas')
+  tmp.width = w; tmp.height = h
+  const tctx = tmp.getContext('2d')
+  tctx.drawImage(bgCanvas, x, y, w, h, 0, 0, w, h)
+
+  // Apply stack blur to pixel data
+  const imageData = tctx.getImageData(0, 0, w, h)
+  stackBlur(imageData.data, w, h, 18)
+  tctx.putImageData(imageData, 0, 0)
+
+  // Draw blurred region clipped to ellipse
+  drCtx.save()
   drCtx.beginPath()
   drCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
   drCtx.clip()
-
-  // Draw blurred image using CSS filter
-  drCtx.filter = 'blur(18px)'
-  drCtx.drawImage(bgCanvas, 0, 0)
-  drCtx.filter = 'none'
-
-  // Subtle dark overlay to make blur more obvious
-  drCtx.fillStyle = 'rgba(0,0,0,0.15)'
-  drCtx.beginPath()
-  drCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
-  drCtx.fill()
-
+  drCtx.drawImage(tmp, x, y)
   drCtx.restore()
 }
 
@@ -546,7 +623,7 @@ export default function App() {
 
       // Fire face detection in background
       const hasTracked = Object.values(trackingRef.current).some(Boolean)
-      if (hasTracked && ts - lastDetectRef.current > DETECT_INTERVAL) {
+      if (hasTracked && vidRef.current && !vidRef.current.paused && ts - lastDetectRef.current > DETECT_INTERVAL) {
         lastDetectRef.current = ts
         detectAndUpdateBlurs()
       }
@@ -577,7 +654,7 @@ export default function App() {
 
       const { cx, cy, confidence } = findBestMatch(cv, tmpl, s.cx, s.cy, searchPad)
       // If confidence too low hold last position
-      if (confidence < 0.3) return s
+      if (confidence < 0.15) return s
 
       updated = true
       return { ...s, cx, cy }
