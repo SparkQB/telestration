@@ -394,10 +394,8 @@ export default function App() {
   const [txtVal,      setTxtVal]      = useState('')
   const [lblModal,    setLblModal]    = useState(null)
   const [lblVal,      setLblVal]      = useState('')
-  const [plays,       setPlays]       = useState([])
-  const [showPlays,   setShowPlays]   = useState(false)
-  const [playName,    setPlayName]    = useState('')
-  const [animating,   setAnimating]   = useState(false)
+
+
   const [tfStatus,    setTfStatus]    = useState('idle') // idle|loading|ready|error
   const [tracking,    setTracking]    = useState({})     // shapeId -> bool (reactive mirror of trackingRef)
 
@@ -986,27 +984,7 @@ export default function App() {
     return `${m}:${String(s).padStart(2,'0')}.${String(ms).padStart(2,'0')}`
   }
 
-  // ── Animate routes ────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!animating) return
-    const animated = shapes.filter(s => s.type==='route'||s.type==='arrow')
-    if (!animated.length) { setAnimating(false); return }
-    let t0 = null; const dur = 2400
-    const tick = ts => {
-      if (!t0) t0 = ts
-      const p = Math.min((ts - t0) / dur, 1)
-      const c = drRef.current; if (!c) return
-      const ctx = c.getContext('2d'); ctx.clearRect(0, 0, c.width, c.height)
-      shapes.forEach(s => {
-        if (s.type === 'route') renderShape(ctx, { ...s, pts: s.pts.slice(0, Math.max(2, Math.floor(s.pts.length * p))) })
-        else if (s.type === 'arrow') renderShape(ctx, { ...s, x2: s.x1+(s.x2-s.x1)*p, y2: s.y1+(s.y2-s.y1)*p })
-        else renderShape(ctx, s)
-      })
-      if (p < 1) rafRef.current = requestAnimationFrame(tick)
-      else { setAnimating(false); renderShapes(shapes, null, selId, trackingRef.current) }
-    }
-    rafRef.current = requestAnimationFrame(tick)
-  }, [animating])
+
 
   // ── Export ────────────────────────────────────────────────────────────────────
   function exportImg() {
@@ -1019,16 +997,7 @@ export default function App() {
     a.download = 'sparkqb-film.png'; a.href = tmp.toDataURL('image/png'); a.click()
   }
 
-  function savePlay() {
-    const name = playName.trim() || `Play ${plays.length+1}`
-    const tmp  = document.createElement('canvas')
-    const th   = Math.round(200 * csz.current.h / csz.current.w)
-    tmp.width = 200; tmp.height = th
-    const ctx = tmp.getContext('2d')
-    ctx.drawImage(bgRef.current, 0,0,200,th); ctx.drawImage(drRef.current, 0,0,200,th)
-    setPlays(p => [...p, { id:uid(), name, shapes:[...shapes], thumb:tmp.toDataURL('image/jpeg',0.6) }])
-    setPlayName('')
-  }
+
 
   function handleToolClick(id) {
     if (tool === id) setPopover(popover === id ? null : id)
@@ -1419,30 +1388,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Playbook */}
-      {showPlays && (
-        <div className="modal-bg" onClick={() => setShowPlays(false)}>
-          <div className="modal modal-wide" onClick={e => e.stopPropagation()}>
-            <h3>PLAYBOOK</h3>
-            <div className="save-row">
-              <input value={playName} onChange={e => setPlayName(e.target.value)}
-                placeholder="Name this play…" className="modal-input flex1"/>
-              <button className="btn-pri" onClick={savePlay}>Save →</button>
-            </div>
-            <div className="plays-grid">
-              {plays.length === 0 && <p className="empty">No plays saved yet.</p>}
-              {plays.map(p => (
-                <button key={p.id} className="play-card"
-                  onClick={() => { push(p.shapes); setShowPlays(false) }}>
-                  {p.thumb && <img src={p.thumb} alt={p.name}/>}
-                  <span>{p.name}</span>
-                </button>
-              ))}
-            </div>
-            <button className="btn-sec full mt" onClick={() => setShowPlays(false)}>Close</button>
-          </div>
-        </div>
-      )}
+
     </div>
   )
 }
