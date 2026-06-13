@@ -5,59 +5,46 @@ import LeadGate, { isLeadSubmitted } from './LeadGate.jsx'
 import { loadPose, drawPoseOverlay, ANGLE_JOINTS, calcJointAngle } from './pose.js'
 import './App.css'
 
-// ── Template matching tracker ────────────────────────────────────────────────
-// Snapshots a region of the bg canvas and tracks it frame-to-frame
-// using sum of absolute differences (SAD) — fast, no ML needed, angle-independent
+// ── Face detection — face-api.js (Safari compatible, self-hosted) ────────────
+let faceApiPromise = null
 
-function snapshotRegion(bgCanvas, cx, cy, rx, ry) {
-  const x = Math.round(cx - rx), y = Math.round(cy - ry)
-  const w = Math.round(rx * 2),  h = Math.round(ry * 2)
-  if (w < 4 || h < 4) return null
-  const tmp = document.createElement('canvas')
-  tmp.width = w; tmp.height = h
-  tmp.getContext('2d').drawImage(bgCanvas, x, y, w, h, 0, 0, w, h)
-  return { canvas: tmp, x, y, w, h }
+function getFaceApi() {
+  if (!faceApiPromise) {
+    faceApiPromise = import('face-api.js').then(async (faceapi) => {
+      const base = window.location.origin + '/faceapi'
+      console.log('[SparkQB] Loading face-api.js models from:', base)
+
+      // Load detection + landmark models in parallel
+      await Promise.all([
+        faceapi.nets.ssdMobilenetv1.loadFromUri(base),
+        faceapi.nets.faceLandmark68Net.loadFromUri(base),
+      ])
+
+      console.log('[SparkQB] face-api.js models ready')
+      return faceapi
+    })
+  }
+  return faceApiPromise
 }
 
-function findBestMatch(bgCanvas, template, lastCx, lastCy, searchPad) {
-  // Search area around last known position
-  const sx = Math.max(0, Math.round(lastCx - template.w/2 - searchPad))
-  const sy = Math.max(0, Math.round(lastCy - template.h/2 - searchPad))
-  const ex = Math.min(bgCanvas.width  - template.w, sx + template.w + searchPad*2)
-  const ey = Math.min(bgCanvas.height - template.h, sy + template.h + searchPad*2)
+async function detectFacesInFrame(videoEl) {
+  const faceapi = await getFaceApi()
+  try {
+    // Detect all faces with landmarks
+    const detections = await faceapi
+      .detectAllFaces(videoEl, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.35 }))
+      .withFaceLandmarks()
 
-  const step = Math.max(2, Math.round(Math.min(template.w, template.h) * 0.15))
-
-  // Get template pixel data (downsampled for speed)
-  const tCtx = template.canvas.getContext('2d')
-  const tData = tCtx.getImageData(0, 0, template.w, template.h).data
-
-  // Sample the search area
-  const searchCtx = bgCanvas.getContext('2d')
-  let bestSAD = Infinity, bestX = lastCx, bestY = lastCy
-
-  for (let ty = sy; ty <= ey; ty += step) {
-    for (let tx = sx; tx <= ex; tx += step) {
-      const patch = searchCtx.getImageData(tx, ty, template.w, template.h).data
-      let sad = 0
-      // Sample every 4th pixel for speed
-      for (let i = 0; i < tData.length; i += 16) {
-        sad += Math.abs(tData[i] - patch[i])
-        sad += Math.abs(tData[i+1] - patch[i+1])
-        sad += Math.abs(tData[i+2] - patch[i+2])
-      }
-      if (sad < bestSAD) {
-        bestSAD = sad
-        bestX = tx + template.w/2
-        bestY = ty + template.h/2
-      }
-    }
+    return detections.map(d => ({
+      topLeft:     [d.detection.box.x,                      d.detection.box.y],
+      bottomRight: [d.detection.box.x + d.detection.box.width,
+                    d.detection.box.y + d.detection.box.height],
+      landmarks:   d.landmarks.positions.map(p => ({ x: p.x, y: p.y })),
+    }))
+  } catch(e) {
+    console.warn('[SparkQB] Detection error:', e)
+    return []
   }
-
-  // Normalize SAD — if too high, match is unreliable, hold position
-  const maxSAD = tData.length / 16 * 255 * 3
-  const confidence = 1 - bestSAD / maxSAD
-  return { cx: bestX, cy: bestY, confidence }
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -293,104 +280,49 @@ function renderShape(ctx, s, selected = false) {
   ctx.restore()
 }
 
-// ── Gaussian blur circle ─────────────────────────────────────────────────────
-// ── Stack blur — pure JS, works on all browsers including Safari ──────────────
-function stackBlur(pixels, width, height, radius) {
-  const div = 2 * radius + 1
-  const widthMinus1 = width - 1
-  const heightMinus1 = height - 1
-  const radiusPlus1 = radius + 1
-  const sumFactor = radiusPlus1 * (radiusPlus1 + 1) / 2
-
-  const r = new Int32Array(width * height)
-  const g = new Int32Array(width * height)
-  const b = new Int32Array(width * height)
-
-  let rSum, gSum, bSum, x, y, i, p, p1, p2, yp, yi, yw
-  let rInSum, gInSum, bInSum, rOutSum, gOutSum, bOutSum
-
-  yw = yi = 0
-  for (y = 0; y < height; y++) {
-    rInSum = gInSum = bInSum = rOutSum = gOutSum = bOutSum = rSum = gSum = bSum = 0
-    for (i = -radius; i <= radius; i++) {
-      p = (yi + Math.min(widthMinus1, Math.max(0, i))) * 4
-      const wt = radiusPlus1 - Math.abs(i)
-      rSum += pixels[p]   * wt; gSum += pixels[p+1] * wt; bSum += pixels[p+2] * wt
-      if (i > 0) { rInSum += pixels[p]; gInSum += pixels[p+1]; bInSum += pixels[p+2] }
-      else       { rOutSum+= pixels[p]; gOutSum+= pixels[p+1]; bOutSum+= pixels[p+2] }
-    }
-    let xp = 1
-    for (x = 0; x < width; x++) {
-      r[yi] = rSum / sumFactor | 0
-      g[yi] = gSum / sumFactor | 0
-      b[yi] = bSum / sumFactor | 0
-      rSum -= rOutSum; gSum -= gOutSum; bSum -= bOutSum
-      p1 = (yw + Math.min(widthMinus1, xp + radius)) * 4
-      p2 = (yw + Math.max(0, x - radius)) * 4
-      rOutSum -= pixels[p2];   gOutSum -= pixels[p2+1]; bOutSum -= pixels[p2+2]
-      rInSum  += pixels[p1];   gInSum  += pixels[p1+1]; bInSum  += pixels[p1+2]
-      rSum += rInSum; gSum += gInSum; bSum += bInSum
-      rOutSum += r[yi]; gOutSum += g[yi]; bOutSum += b[yi]
-      rInSum  -= r[yi]; gInSum  -= g[yi]; bInSum  -= b[yi]
-      yi++; xp = Math.min(xp + 1, widthMinus1)
-    }
-    yw += width
-  }
-
-  for (x = 0; x < width; x++) {
-    rInSum = gInSum = bInSum = rOutSum = gOutSum = bOutSum = rSum = gSum = bSum = 0
-    yp = -radius * width
-    for (i = -radius; i <= radius; i++) {
-      yi = Math.max(0, yp) + x
-      const wt = radiusPlus1 - Math.abs(i)
-      rSum += r[yi] * wt; gSum += g[yi] * wt; bSum += b[yi] * wt
-      if (i > 0) { rInSum += r[yi]; gInSum += g[yi]; bInSum += b[yi] }
-      else       { rOutSum+= r[yi]; gOutSum+= g[yi]; bOutSum+= b[yi] }
-      if (i < heightMinus1) yp += width
-    }
-    yi = x
-    let yp2 = radiusPlus1 * width
-    for (y = 0; y < height; y++) {
-      const idx = yi * 4
-      pixels[idx]   = rSum / sumFactor | 0
-      pixels[idx+1] = gSum / sumFactor | 0
-      pixels[idx+2] = bSum / sumFactor | 0
-      rSum -= rOutSum; gSum -= gOutSum; bSum -= bOutSum
-      const p1y = x + Math.min(heightMinus1, y + radiusPlus1) * width
-      const p2y = x + Math.max(0, y - radius) * width
-      rOutSum -= r[p2y]; gOutSum -= g[p2y]; bOutSum -= b[p2y]
-      rInSum  += r[p1y]; gInSum  += g[p1y]; bInSum  += b[p1y]
-      rSum += rInSum; gSum += gInSum; bSum += bInSum
-      rOutSum += r[yi]; gOutSum += g[yi]; bOutSum += b[yi]
-      rInSum  -= r[yi]; gInSum  -= g[yi]; bInSum  -= b[yi]
-      yi += width
-    }
-  }
-}
-
-function renderFaceBlur(drCtx, bgCanvas, cx, cy, rx, ry) {
-  if (rx < 4 || ry < 4) return
-  const x = Math.round(cx - rx), y = Math.round(cy - ry)
-  const w = Math.round(rx * 2),  h = Math.round(ry * 2)
+// ── Circle pixelate blur ─────────────────────────────────────────────────────
+function renderCircleBlur(drCtx, bgCanvas, cx, cy, r, selected) {
+  if (r < 4) return
+  const x = Math.round(cx - r), y = Math.round(cy - r)
+  const w = Math.round(r * 2),  h = Math.round(r * 2)
   if (w < 4 || h < 4) return
 
-  // Extract region from bg canvas
+  const blockSize = 12
   const tmp = document.createElement('canvas')
   tmp.width = w; tmp.height = h
-  const tctx = tmp.getContext('2d')
-  tctx.drawImage(bgCanvas, x, y, w, h, 0, 0, w, h)
+  tmp.getContext('2d').drawImage(bgCanvas, x, y, w, h, 0, 0, w, h)
 
-  // Apply stack blur to pixel data
-  const imageData = tctx.getImageData(0, 0, w, h)
-  stackBlur(imageData.data, w, h, 18)
-  tctx.putImageData(imageData, 0, 0)
+  const small = document.createElement('canvas')
+  small.width  = Math.max(1, Math.round(w / blockSize))
+  small.height = Math.max(1, Math.round(h / blockSize))
+  const sctx = small.getContext('2d')
+  sctx.imageSmoothingEnabled = false
+  sctx.drawImage(tmp, 0, 0, small.width, small.height)
 
-  // Draw blurred region clipped to ellipse
   drCtx.save()
+  // Clip to circle
   drCtx.beginPath()
-  drCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+  drCtx.arc(cx, cy, r, 0, Math.PI * 2)
   drCtx.clip()
-  drCtx.drawImage(tmp, x, y)
+
+  drCtx.imageSmoothingEnabled = false
+  drCtx.drawImage(small, x, y, w, h)
+  drCtx.imageSmoothingEnabled = true
+
+  drCtx.fillStyle = 'rgba(16,18,20,0.2)'
+  drCtx.fill()
+
+  if (selected) {
+    drCtx.setLineDash([4,4])
+    drCtx.strokeStyle = '#B2FF00'
+    drCtx.lineWidth = 1.5
+    drCtx.shadowColor = '#B2FF00'
+    drCtx.shadowBlur = 8
+    drCtx.beginPath()
+    drCtx.arc(cx, cy, r, 0, Math.PI * 2)
+    drCtx.stroke()
+    drCtx.setLineDash([])
+  }
   drCtx.restore()
 }
 
@@ -400,7 +332,7 @@ function bounds(s) {
     case 'player-o': case 'player-x': return { x:s.x-(s.r||20), y:s.y-(s.r||20), w:(s.r||20)*2, h:(s.r||20)*2 }
     case 'circle': return { x:s.cx-s.r, y:s.cy-s.r, w:s.r*2, h:s.r*2 }
     case 'rect': return { x:Math.min(s.x,s.x+s.w), y:Math.min(s.y,s.y+s.h), w:Math.abs(s.w), h:Math.abs(s.h) }
-    case 'blur': return { x: s.cx-s.rx, y: s.cy-s.ry, w: s.rx*2, h: s.ry*2 }
+    case 'blur': return { x: s.cx-s.r, y: s.cy-s.r, w: s.r*2, h: s.r*2 }
     case 'arrow': return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) }
     case 'text':  return { x:s.x, y:s.y-(s.fs||28), w:120, h:(s.fs||28)+8 }
     case 'line': return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) }
@@ -440,10 +372,9 @@ export default function App() {
   // Face tracking refs
   const trackingRef    = useRef({})    // shapeId -> bool
   const lastDetectRef  = useRef(0)     // timestamp of last detection
-  const DETECT_INTERVAL = 33           // ms between detections (~30fps)
-  const templateRef    = useRef({})    // shapeId -> snapshot canvas for template matching
-  const apiAvailable   = useRef(null)
-  const lastKnownPos   = useRef({})
+  const DETECT_INTERVAL = 50           // ms between detections (~20fps)
+  const apiAvailable   = useRef(null)  // null=unknown, true/false
+  const lastKnownPos   = useRef({})    // shapeId -> {x,y,w,h} last detected position
 
   const hist = useHistory([])
   const { shapes, push, undo, redo, canUndo, canRedo } = hist
@@ -472,9 +403,8 @@ export default function App() {
 
   const [unlocked, setUnlocked] = useState(isLeadSubmitted())
 
-  const drawing      = useRef(false)
-  const scrubbing    = useRef(false)
-  const scrubTrack   = useRef(null)  // ref to custom scrubber track div
+  const drawing   = useRef(false)
+  const scrubbing  = useRef(false)
   const stroke  = useRef(null)
   const dragSt  = useRef(null)
   const csz     = useRef({ w: 1280, h: 720 })
@@ -514,7 +444,6 @@ export default function App() {
   // ── Goniometer state ─────────────────────────────────────────────────────────
   const gonioRef = useRef(null)  // in-progress goniometer { id, pts[] }
   const gonioDragPoint = useRef(-1) // which point is being dragged in select mode
-  const gonioLastTap = useRef(0)  // timestamp of last goniometer tap
   const lastTapRef = useRef({ id: null, time: 0 }) // for double-tap detection on touch
 
   // ── Table drag state ─────────────────────────────────────────────────────────
@@ -529,19 +458,6 @@ export default function App() {
   }
 
   useEffect(() => { shapesRef.current = shapes }, [shapes])
-
-  // Cancel in-progress goniometer on Escape
-  useEffect(() => {
-    const onKey = e => {
-      if (e.key === 'Escape' && gonioRef.current) {
-        gonioRef.current = null
-        const oc = ovRef.current
-        if (oc) oc.getContext('2d').clearRect(0, 0, oc.width, oc.height)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
 
   const ts = toolStyles[tool]
 
@@ -595,12 +511,12 @@ export default function App() {
     const tm = trackMap ?? trackingRef.current
     list.forEach(s => {
       if (s.type === 'blur') {
-        renderFaceBlur(ctx, bg, s.cx, s.cy, s.rx, s.ry)
+        renderCircleBlur(ctx, bg, s.cx, s.cy, s.r, s.id === sel)
       } else renderShape(ctx, s, s.id === sel)
     })
     if (active) {
       if (active.type === 'blur') {
-        renderFaceBlur(ctx, bg, active.cx, active.cy, active.rx, active.ry)
+        renderCircleBlur(ctx, bg, active.cx, active.cy, active.r, false)
       } else renderShape(ctx, active, false)
     }
   }, [])
@@ -623,9 +539,9 @@ export default function App() {
 
       // Fire face detection in background
       const hasTracked = Object.values(trackingRef.current).some(Boolean)
-      if (hasTracked && vidRef.current && !vidRef.current.paused && ts - lastDetectRef.current > DETECT_INTERVAL) {
+      if (hasTracked && ts - lastDetectRef.current > DETECT_INTERVAL) {
         lastDetectRef.current = ts
-        detectAndUpdateBlurs()
+        detectAndUpdateBlurs() // intentionally NOT awaited
       }
 
       // Fire pose detection in background
@@ -640,24 +556,57 @@ export default function App() {
     return () => cancelAnimationFrame(rafRef.current)
   }, [videoMeta, renderBg])
 
-  // ── Template matching tracker ────────────────────────────────────────────────
-  function detectAndUpdateBlurs() {
+  // ── Face detection ────────────────────────────────────────────────────────────
+  async function detectAndUpdateBlurs() {
+    if (!vidRef.current) return
     const cv = bgRef.current; if (!cv) return
+
+    const scaleX = cv.width  / (vidRef.current.videoWidth  || cv.width)
+    const scaleY = cv.height / (vidRef.current.videoHeight || cv.height)
+
+    let preds = []
+    try {
+      preds = await detectFacesInFrame(vidRef.current)
+      if (apiAvailable.current === null) {
+        apiAvailable.current = true
+        setTfStatus('ready')
+      }
+    } catch(e) {
+      apiAvailable.current = false
+      setTfStatus('error')
+      return
+    }
+
     const currentShapes = shapesRef.current
     let updated = false
-    const searchPad = Math.round(cv.width * 0.12) // search 12% of frame width around last pos
 
     const newShapes = currentShapes.map(s => {
       if (s.type !== 'blur' || !trackingRef.current[s.id]) return s
-      const tmpl = templateRef.current[s.id]
-      if (!tmpl) return s
 
-      const { cx, cy, confidence } = findBestMatch(cv, tmpl, s.cx, s.cy, searchPad)
-      // If confidence too low hold last position
-      if (confidence < 0.15) return s
+      // Find closest detected face to current circle center
+      let closest = null, minDist = Infinity
+      preds.forEach(p => {
+        const [fx, fy]   = p.topLeft
+        const [fx2, fy2] = p.bottomRight
+        const fcx = (fx + fx2) / 2 * scaleX
+        const fcy = (fy + fy2) / 2 * scaleY
+        const dist = Math.hypot(fcx - s.cx, fcy - s.cy)
+        if (dist < minDist) { minDist = dist; closest = p }
+      })
+
+      // No face detected — hold last known position
+      if (!closest) return s
+
+      const [tx, ty]   = closest.topLeft
+      const [tx2, ty2] = closest.bottomRight
+      const fw  = (tx2 - tx) * scaleX
+      const fh  = (ty2 - ty) * scaleY
+      const ncx = (tx + (tx2-tx)/2) * scaleX
+      const ncy = (ty + (ty2-ty)/2) * scaleY
+      const nr  = Math.max(fw, fh) / 2 * 1.25  // keep 25% padding
 
       updated = true
-      return { ...s, cx, cy }
+      return { ...s, cx: ncx, cy: ncy, r: nr }
     })
 
     if (updated) {
@@ -722,7 +671,29 @@ export default function App() {
     }
   }
 
-
+  // Toggle tracking on a blur shape
+  async function toggleTracking(shapeId) {
+    const already = trackingRef.current[shapeId]
+    if (already) {
+      trackingRef.current = { ...trackingRef.current, [shapeId]: false }
+      delete lastKnownPos.current[shapeId]
+      setTracking({ ...trackingRef.current })
+      return
+    }
+    setTfStatus('loading')
+    try {
+      await getFaceApi()  // preload — shows spinner while loading
+      setTfStatus('ready')
+    } catch(e) {
+      console.error('[SparkQB] Model load failed:', e)
+      setTfStatus('error')
+      alert('Could not load face tracking model. Make sure you have run download-model.js and committed the files to GitHub.')
+      return
+    }
+    trackingRef.current = { ...trackingRef.current, [shapeId]: true }
+    setTracking({ ...trackingRef.current })
+    await detectAndUpdateBlurs()
+  }
 
   // ── Pointer events ────────────────────────────────────────────────────────────
   function onDown(e) {
@@ -777,9 +748,6 @@ export default function App() {
 
     // Goniometer — tap to place points one at a time
     if (tool === 'gonio') {
-      const now = Date.now()
-      if (now - gonioLastTap.current < 300) return  // ignore accidental double-taps
-      gonioLastTap.current = now
       if (!gonioRef.current) {
         gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
       } else {
@@ -803,7 +771,7 @@ export default function App() {
     else if (tool==='arrow')  stroke.current = { id:uid(), type:'arrow',  x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y, ...ts }
     else if (tool==='circle') stroke.current = { id:uid(), type:'circle', cx:pos.x, cy:pos.y, r:0, ...ts }
     else if (tool==='rect')   stroke.current = { id:uid(), type:'rect',   x:pos.x, y:pos.y, w:0, h:0, ...ts }
-    else if (tool==='blur')   stroke.current = { id:uid(), type:'blur',   cx:pos.x, cy:pos.y, rx:0, ry:0 }
+    else if (tool==='blur')   stroke.current = { id:uid(), type:'blur',   cx:pos.x, cy:pos.y, r:0 }
   }
 
   function onMove(e) {
@@ -844,21 +812,17 @@ export default function App() {
     else if (s.type==='arrow')  { s.x2=pos.x; s.y2=pos.y }
     else if (s.type==='circle') s.r = Math.hypot(pos.x-s.cx, pos.y-s.cy)
     else if (s.type==='rect') { s.w=pos.x-s.x; s.h=pos.y-s.y }
-    else if (s.type==='blur') {
-      const r = Math.hypot(pos.x-s.cx, pos.y-s.cy)
-      s.rx = r; s.ry = r
-    }
+    else if (s.type==='blur') { s.r = Math.hypot(pos.x-s.cx, pos.y-s.cy) }
 
     // Draw live preview on overlay canvas
     const oc = ovRef.current; if (!oc) return
     const octx = oc.getContext('2d')
     octx.clearRect(0, 0, oc.width, oc.height)
     if (s.type === 'blur') {
-      // Show dashed circle outline while drawing
       octx.save()
       octx.strokeStyle = '#B2FF00'; octx.lineWidth = 2
       octx.setLineDash([6, 4])
-      octx.beginPath(); octx.arc(s.cx, s.cy, s.rx || 1, 0, Math.PI*2); octx.stroke()
+      octx.beginPath(); octx.arc(s.cx, s.cy, Math.max(1, s.r), 0, Math.PI*2); octx.stroke()
       octx.setLineDash([])
       octx.restore()
     } else {
@@ -889,6 +853,31 @@ export default function App() {
       dragSt.current = null; gonioDragPoint.current = -1; return
     }
 
+    // Goniometer — place point on finger lift
+    if (tool === 'gonio') {
+      const oc = ovRef.current
+      const r  = oc.getBoundingClientRect()
+      const src = e.changedTouches ? e.changedTouches[0] : e
+      const pos = { x:(src.clientX-r.left)*(oc.width/r.width), y:(src.clientY-r.top)*(oc.height/r.height) }
+      if (!gonioRef.current) {
+        gonioRef.current = { id: uid(), type: 'gonio', pts: [pos], color: '#00E5FF', lw: 2, opacity: 1 }
+      } else {
+        gonioRef.current.pts.push(pos)
+        if (gonioRef.current.pts.length === 3) {
+          push([...shapes, gonioRef.current])
+          gonioRef.current = null
+          const octx = oc.getContext('2d')
+          octx.clearRect(0, 0, oc.width, oc.height)
+        }
+      }
+      if (gonioRef.current) {
+        const octx = oc.getContext('2d')
+        octx.clearRect(0, 0, oc.width, oc.height)
+        renderShape(octx, gonioRef.current, false)
+      }
+      return
+    }
+
     if (!drawing.current || !stroke.current) return
     drawing.current = false
     const s = stroke.current; stroke.current = null
@@ -901,28 +890,17 @@ export default function App() {
       : s.type==='arrow'  ? Math.hypot(s.x2-s.x1,s.y2-s.y1)>8
       : s.type==='circle' ? s.r>5
       : s.type==='rect' ? Math.abs(s.w)>10&&Math.abs(s.h)>10
-      : s.type==='blur' ? s.rx > 10 : false
+      : s.type==='blur' ? s.r > 10 : false
     if (valid) {
-      const committed = s.type === 'blur' ? commitBlur(s) : s
+      const committed = s.type === 'blur'
+        ? { ...s, r: s.r * 1.25 }
+        : s
       push([...shapes, committed])
     }
     else renderShapes(shapes, null, selId, trackingRef.current)
   }
 
   // ── Text / label ──────────────────────────────────────────────────────────────
-  // Called when a blur shape is committed — expand by padding and snapshot for tracking
-  function commitBlur(s) {
-    const PAD = 0.25
-    const expanded = { ...s, rx: s.rx * (1 + PAD), ry: s.ry * (1 + PAD) }
-    const snap = snapshotRegion(bgRef.current, expanded.cx, expanded.cy, expanded.rx, expanded.ry)
-    if (snap) {
-      templateRef.current[expanded.id] = snap
-      trackingRef.current = { ...trackingRef.current, [expanded.id]: true }
-      setTracking({ ...trackingRef.current })
-    }
-    return expanded
-  }
-
   function commitTxt() {
     if (!pendingTxt || !txtVal.trim()) { setPendingTxt(null); return }
     push([...shapes, { id:uid(), type:'text', x:pendingTxt.x, y:pendingTxt.y, text:txtVal, fs:22,
@@ -987,15 +965,6 @@ export default function App() {
   function seek(val) {
     const v = vidRef.current; if (!v) return
     v.currentTime = parseFloat(val); setCurrentT(parseFloat(val))
-  }
-
-  function scrubFromPointer(e) {
-    const track = scrubTrack.current; if (!track || !duration) return
-    const r = track.getBoundingClientRect()
-    const clientX = e.touches ? e.touches[0].clientX : (e.clientX ?? 0)
-    const ratio = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
-    const t = ratio * duration
-    seek(t)
   }
 
   function stepFrame(dir) {
@@ -1063,21 +1032,18 @@ export default function App() {
 
   function handleToolClick(id) {
     if (tool === id) setPopover(popover === id ? null : id)
-    else {
-      setTool(id); setSelId(null); setPopover(null)
-      // Cancel any in-progress goniometer
-      if (gonioRef.current) {
-        gonioRef.current = null
-        gonioLastTap.current = 0
-        const oc = ovRef.current
-        if (oc) oc.getContext('2d').clearRect(0, 0, oc.width, oc.height)
-      }
-    }
+    else { setTool(id); setSelId(null); setPopover(null) }
   }
 
   const isPortrait = videoMeta ? videoMeta.h > videoMeta.w : false
   const selectedShape = shapes.find(s => s.id === selId)
   const selectedIsBlur = selectedShape?.type === 'blur'
+
+  // Also show track UI when blur tool is active and hovering over a blur shape
+  // Find the most recently placed blur shape to show controls on
+  const activeBlurId = selectedIsBlur ? selId :
+    (tool === 'blur' ? shapes.filter(s => s.type === 'blur').slice(-1)[0]?.id : null)
+  const activeBlurShape = shapes.find(s => s.id === activeBlurId)
 
   if (!unlocked) return <LeadGate onUnlock={() => setUnlocked(true)} />
 
@@ -1216,13 +1182,9 @@ export default function App() {
           {TOOLS.map(t => (
             <div key={t.id} className="pal-item">
               <button className={`pal-btn ${tool===t.id?'active':''} ${t.id==='blur'?'pal-btn-text':''}`}
-                title={t.id === 'blur' ? 'Draw circle to blur face' : t.label}
-                onClick={() => handleToolClick(t.id)}>
+                title={t.label} onClick={() => handleToolClick(t.id)}>
                 {t.icon ? <I d={t.icon} size={20}/> : <span className="pal-text-label">{t.label}</span>}
               </button>
-              {tool === t.id && t.id === 'blur' && (
-                <div className="blur-tooltip">Draw circle around face</div>
-              )}
               {popover === t.id && tool === t.id && (
                 <div className={`tool-popover ${isPortrait ? 'pop-left' : 'pop-top'}`}
                   onClick={e => e.stopPropagation()}>
@@ -1288,7 +1250,30 @@ export default function App() {
           ))}
         </div>
 
-
+        {/* Floating blur controls — bottom left when a blur is selected */}
+        {activeBlurShape && (
+          <div className="blur-controls" onClick={e => e.stopPropagation()}>
+            <span className="blur-controls-label">BLUR</span>
+            <button
+              className={`track-btn ${tracking[activeBlurId] ? 'tracking' : ''}`}
+              onClick={() => toggleTracking(activeBlurId)}
+              disabled={tfStatus === 'loading'}
+            >
+              {tfStatus === 'loading' ? (
+                <><span className="spin">⟳</span> LOADING…</>
+              ) : tracking[activeBlurId] ? (
+                <>● TRACKING</>
+              ) : (
+                <>TRACK FACE</>
+              )}
+            </button>
+            <button className="blur-del-btn"
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); push(shapes.filter(s => s.id !== activeBlurId)); delete trackingRef.current[activeBlurId]; setTracking({...trackingRef.current}); setSelId(null) }}>
+              <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={13}/> DELETE
+            </button>
+          </div>
+        )}
 
         {/* Inline text input */}
         {pendingTxt && (() => {
@@ -1328,13 +1313,7 @@ export default function App() {
         {/* Generic delete for non-blur selected */}
         {selId && !selectedIsBlur && (
           <button className="del-btn"
-            onPointerDown={e => e.stopPropagation()}
-            onClick={e => {
-              e.stopPropagation()
-              delete templateRef.current[selId]
-              delete trackingRef.current[selId]
-              push(shapes.filter(s => s.id !== selId)); setSelId(null)
-            }}>
+            onClick={() => { push(shapes.filter(s => s.id !== selId)); setSelId(null) }}>
             <I d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" size={14}/> Delete
           </button>
         )}
@@ -1350,20 +1329,9 @@ export default function App() {
           </button>
           <button className="vb" onClick={() => stepFrame(1)}   title="+1 frame"><I d="M9 5l7 7-7 7" size={15}/></button>
           <button className="vb" onClick={() => stepFrame(10)}  title="+10 frames"><I d="M5 4l10 8-10 8V4zM19 4v16" size={15}/></button>
-          <div className="scrub-wrap" ref={scrubTrack}
-            onPointerDown={e => {
-              e.currentTarget.setPointerCapture(e.pointerId)
-              scrubbing.current = true
-              scrubFromPointer(e)
-            }}
-            onPointerMove={e => { if (scrubbing.current) scrubFromPointer(e) }}
-            onPointerUp={e => { scrubbing.current = false; scrubFromPointer(e) }}
-            onPointerCancel={() => { scrubbing.current = false }}
-          >
-            <div className="scrub-track">
-              <div className="scrub-fill" style={{ width: `${duration ? (currentT/duration)*100 : 0}%` }}/>
-              <div className="scrub-thumb" style={{ left: `${duration ? (currentT/duration)*100 : 0}%` }}/>
-            </div>
+          <div className="scrub-wrap">
+            <input type="range" className="scrub" min={0} max={duration} step={1/(videoMeta.fps||30)/2}
+              value={currentT} onChange={e => seek(e.target.value)}/>
           </div>
           <button className="speed-btn" onClick={cycleSpeed}>{SPEEDS[speedIdx]}×</button>
           <span className="tc">{fmt(currentT)}</span>
