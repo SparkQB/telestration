@@ -1,4 +1,4 @@
-# SpinLab Film
+# SparkQB Film
 
 QB film annotation tool — built with React + Vite.
 
