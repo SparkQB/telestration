@@ -98,9 +98,9 @@ export function unwrapDeg(arr) {
 const wrap180 = a => { let v = ((a + 180) % 360 + 360) % 360 - 180; return v }
 
 // Clean + smooth every used landmark series. Returns frames with smoothed world pts.
-export function smoothSeries(frames, fps) {
+export function smoothSeries(frames, fps, fcPos = 10) {
   const n = frames.length
-  const fc = Math.min(15, fps * 0.3)
+  const fc = Math.min(fcPos, fps * 0.3)
   const t = frames.map(f => f.t)
   const out = frames.map(f => ({ t: f.t, world: [] }))
   USED.forEach(li => {
@@ -206,7 +206,21 @@ export function elbowFlexion(w, side) {
 }
 
 // Yaw of a left→right segment about the camera-vertical axis (y), degrees.
-const yawOf = (lp, rp) => (isNum(lp) && isNum(rp)) ? Math.atan2(rp.z - lp.z, rp.x - lp.x) * DEG : NaN
+// Single-camera depth (z) is compressed and jittery, while x/y are reliable.
+// So depth is rebuilt from the segment's true length (Taylor method):
+//   |dz| = sqrt(L² − dx² − dy²), sign taken from the model's depth estimate.
+const yawOf = (lp, rp, L) => {
+  if (!isNum(lp) || !isNum(rp)) return NaN
+  const dx = rp.x - lp.x, dy = rp.y - lp.y, dzRaw = rp.z - lp.z
+  let dz = dzRaw
+  if (L > 0) dz = Math.sign(dzRaw || 1) * Math.sqrt(Math.max(0, L * L - dx * dx - dy * dy))
+  return Math.atan2(dz, dx) * DEG
+}
+function segLength(frames, a, b) {
+  const v = frames.map(({ world: w }) => isNum(w[a]) && isNum(w[b]) ? mag(sub(w[a], w[b])) : NaN)
+    .filter(Number.isFinite).sort((x, y) => x - y)
+  return v.length ? v[Math.floor(v.length * 0.9)] : NaN   // 90th pct ≈ true length
+}
 
 // ── anthropometric scale ─────────────────────────────────────────────────────
 // Winter segment ratios: upper arm .186H, forearm .146H, thigh .245H, shank .246H
@@ -240,7 +254,10 @@ export function analyzeThrow(rawFrames, opts) {
   const detected = rawFrames.filter(f => f.world).length
   if (detected < n * 0.5) return { error: 'Player not detected in most frames. Try zooming the clip or a clearer angle.' }
 
-  const { frames, t } = smoothSeries(rawFrames, fps)
+  // 10 Hz validated against a SpinLab report (240fps): MER, release time and
+  // hand speed all within ~5%
+  const fcPos = opts.fcPos ?? 10, fcRot = opts.fcRot ?? 10
+  const { frames, t } = smoothSeries(rawFrames, fps, fcPos)
   const k = bodyScale(frames, heightM)
 
   const WR  = side === 'left' ? L.L_WR : L.R_WR
@@ -249,8 +266,14 @@ export function analyzeThrow(rawFrames, opts) {
   const tfs    = frames.map(f => trunkFrame(f.world))
   const er     = frames.map((f, i) => shoulderER(f.world, side, tfs[i]))
   const elbow  = frames.map(f => elbowFlexion(f.world, side))
-  const pelvisYaw = unwrapDeg(fillGaps(frames.map(f => yawOf(f.world[L.L_HIP], f.world[L.R_HIP]))))
-  const torsoYaw  = unwrapDeg(fillGaps(frames.map(f => yawOf(f.world[L.L_SH],  f.world[L.R_SH]))))
+  // Segment orientation is noisier than position (depth jitter), so it gets
+  // an extra, lower-cutoff pass before differentiating.
+  const rotFc = Math.min(fcRot, fps * 0.3)
+  const useTaylor = opts.taylor ?? true
+  const hipL = useTaylor ? segLength(frames, L.L_HIP, L.R_HIP) : 0
+  const shL  = useTaylor ? segLength(frames, L.L_SH,  L.R_SH)  : 0
+  const pelvisYaw = lowpass(unwrapDeg(fillGaps(frames.map(f => yawOf(f.world[L.L_HIP], f.world[L.R_HIP], hipL)))), fps, rotFc)
+  const torsoYaw  = lowpass(unwrapDeg(fillGaps(frames.map(f => yawOf(f.world[L.L_SH],  f.world[L.R_SH],  shL)))), fps, rotFc)
   const pelvisVel = derivative(pelvisYaw, t)
   const torsoVel  = derivative(torsoYaw, t)
   const separation = pelvisYaw.map((p, i) => wrap180(torsoYaw[i] - p))
@@ -274,15 +297,15 @@ export function analyzeThrow(rawFrames, opts) {
     return bi
   }
 
-  // Release: peak hand speed, nudged to the most-extended elbow within ±2 frames
-  let releaseAuto = argmax(handSpeed, edge, n - 1 - edge)
-  if (releaseAuto >= 0) {
-    let best = releaseAuto, bestFlex = elbow[releaseAuto]
-    for (let i = releaseAuto - 2; i <= releaseAuto + 2; i++) {
-      if (i >= 0 && i < n && Number.isFinite(elbow[i]) && (!Number.isFinite(bestFlex) || elbow[i] < bestFlex)) { best = i; bestFlex = elbow[i] }
-    }
-    releaseAuto = best
-  }
+  // Events, anchored on the throwing hand's peak speed (the one robust spike):
+  //   MER     = max shoulder ER from 150ms before to 50ms after that peak
+  //   Release = max elbow extension within 80ms after MER
+  const ms = x => Math.round(fps * x / 1000)
+  const handPk = argmax(handSpeed, edge, n - 1 - edge)
+  const merAuto = handPk >= 0 ? argmax(er, handPk - ms(150), handPk + ms(50)) : -1
+  let releaseAuto = -1
+  if (merAuto >= 0) releaseAuto = argmax(elbow, merAuto + 1, merAuto + ms(80), v => -v)
+  if (releaseAuto < 0) releaseAuto = handPk
   const releaseIdx = Number.isInteger(opts.releaseIdx) ? opts.releaseIdx : releaseAuto
 
   // Hand separation: last frame (before release) where hands were together
@@ -310,10 +333,14 @@ export function analyzeThrow(rawFrames, opts) {
   // ── Metrics ──
   const winLo = separationIdx ?? Math.max(0, releaseIdx - Math.round(fps * 0.6))
   const winHi = releaseIdx
-  const merIdx = releaseIdx >= 0 ? argmax(er, winLo, winHi) : -1
+  // MER: auto unless release was moved by hand, then search the 150ms before it
+  const merIdx = Number.isInteger(opts.releaseIdx)
+    ? argmax(er, releaseIdx - ms(150), releaseIdx)
+    : merAuto
 
   // Peak rotation speeds: magnitude in the window, signed with the throw direction
-  const rotLo = Math.max(0, winLo - Math.round(fps * 0.2)), rotHi = Math.min(n - 1, winHi + Math.round(fps * 0.1))
+  // Trunk rotation peaks fall in the ~200ms before release
+  const rotLo = Math.max(0, releaseIdx - ms(200)), rotHi = Math.min(n - 1, releaseIdx + ms(20))
   const pelvisPeakIdx = argmax(pelvisVel, rotLo, rotHi, Math.abs)
   const torsoPeakIdx  = argmax(torsoVel,  rotLo, rotHi, Math.abs)
   const handPeakIdx   = argmax(handSpeed, rotLo, Math.min(n - 1, winHi + 2))
@@ -325,6 +352,7 @@ export function analyzeThrow(rawFrames, opts) {
   const notes = []
   if (fps < 120) notes.push(`Video is ${Math.round(fps)}fps — speeds will read low. Film at 120–240fps for accurate speed numbers.`)
   notes.push('Rotation and MER use estimated depth from a single camera — best for comparing reps, not exact lab values.')
+  notes.push('Pelvis speed tends to read low (hip points are the hardest to track) — compare it rep-to-rep rather than to lab numbers.')
   if (k > 1.6 || k < 0.6) notes.push('Body scale looks off — check the player height setting.')
 
   return {

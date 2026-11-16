@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 import sparkqbLogo from './assets/sparkqb-logo.svg'
 import sparkqbMark from './assets/sparkqb-logomark.svg'
 import LeadGate, { isLeadSubmitted } from './LeadGate.jsx'
-import { loadPose, drawPoseOverlay, ANGLE_JOINTS, calcJointAngle, detectFrame, startVideoRun, snapshotFrame } from './pose.js'
+import { loadPose, drawPoseOverlay, ANGLE_JOINTS, calcJointAngle, detectFrame, snapshotFrame } from './pose.js'
 import { analyzeThrow, liveER } from './biomech.js'
 import './App.css'
 
@@ -783,7 +783,8 @@ export default function App() {
     setAnaProgress(0)
     try {
       if (poseStatus !== 'ready') { await loadPose(); setPoseStatus('ready') }
-      const detect = await startVideoRun()
+      // Each frame is detected independently (IMAGE mode): VIDEO mode's built-in
+      // temporal smoothing blunts fast motion like hip rotation and arm speed.
       const crop = cropRect()
       const snap = document.createElement('canvas')
       const raw = [], vts = []
@@ -794,7 +795,7 @@ export default function App() {
         if (vts.length && Math.abs(mt - vts[vts.length - 1]) < 1e-5) continue   // duplicate frame
         snapshotFrame(v, snap)
         const tReal = (mt - start) / slowmo
-        const r = detect(snap, tReal, crop)
+        const r = await detectFrame(snap, crop)
         raw.push({ t: tReal, world: r.worldLandmarks, lm2d: r.landmarks })
         vts.push(mt)
         if ((fi - fstart) % 4 === 0) setAnaProgress((fi - fstart) / nFrames)
