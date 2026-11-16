@@ -1,5 +1,6 @@
-// ── Pose detection using MediaPipe Pose ──────────────────────────────────────
-// Self-hosted assets in /public/pose/
+// ── Pose detection using MediaPipe PoseLandmarker ──────────────────────────────────────
+// Uses @mediapipe/tasks-vision PoseLandmarker (heavy model)
+import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 
 const POSE_LANDMARKS = {
   LEFT_SHOULDER:  11,
@@ -45,13 +46,12 @@ export const ANGLE_JOINTS = [
 export const LANDMARK_KEYS = POSE_LANDMARKS
 
 // ── 3D vector math ────────────────────────────────────────────────────────────
+const MIN_VIS = 0.5
+function vis(p) { return p && (p.visibility ?? 1) >= MIN_VIS ? p : null }
 function vec3(a, b) {
   return { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }
 }
 function dot(a, b) { return a.x*b.x + a.y*b.y + a.z*b.z }
-function cross(a, b) {
-  return { x: a.y*b.z - a.z*b.y, y: a.z*b.x - a.x*b.z, z: a.x*b.y - a.y*b.x }
-}
 function mag(v) { return Math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z) }
 function norm(v) { const m = mag(v) || 1; return { x:v.x/m, y:v.y/m, z:v.z/m } }
 function angleBetween(a, b) {
@@ -59,152 +59,29 @@ function angleBetween(a, b) {
   return Math.acos(cosA) * 180 / Math.PI
 }
 
+// Angle at vertex B formed by A-B-C, from 3D world landmarks, visibility-gated
+function angle3(wl, ia, ib, ic) {
+  const A = vis(wl[ia]), B = vis(wl[ib]), C = vis(wl[ic])
+  if (!A || !B || !C) return null
+  const ba = vec3(B, A), bc = vec3(B, C)
+  if (mag(ba) < 1e-4 || mag(bc) < 1e-4) return null
+  return angleBetween(ba, bc)
+}
+
 // ── Angle calculations using 3D world landmarks ───────────────────────────────
-
-// Elbow flexion: 0° = full extension, 180° = full flexion
-// upper arm vector dotted with forearm vector
-function calcElbow(wl, side) {
-  const S = side === 'left' ? wl[11] : wl[12]
-  const E = side === 'left' ? wl[13] : wl[14]
-  const W = side === 'left' ? wl[15] : wl[16]
-  if (!S || !E || !W) return null
-  const upperArm = vec3(E, S)  // elbow to shoulder
-  const forearm  = vec3(E, W)  // elbow to wrist
-  const angle = angleBetween(upperArm, forearm)
-  return Math.round(180 - angle) // 0 = straight, 180 = fully bent
-}
-
-// Knee flexion: 0° = full extension, increasing = flexion
-function calcKnee(wl, side) {
-  const H = side === 'left' ? wl[23] : wl[24]
-  const K = side === 'left' ? wl[25] : wl[26]
-  const A = side === 'left' ? wl[27] : wl[28]
-  if (!H || !K || !A) return null
-  const thigh  = vec3(K, H)  // knee to hip
-  const shin   = vec3(K, A)  // knee to ankle
-  const angle = angleBetween(thigh, shin)
-  return Math.round(180 - angle) // 0 = straight, 180 = fully bent
-}
-
-// Shoulder abduction/adduction — 2D angle between torso and upper arm
-// 0° = arm at side, 90° = arm horizontal, 180° = arm straight up
-// Uses 2D image landmarks for reliability
-function calcShoulderAbduction(wl2d, side) {
-  // wl2d here is actually poseLandmarks (2D) stored on the model
-  // We pass worldLandmarks but fall back gracefully
-  if (!wl2d) return null
-  const S = side === 'left' ? wl2d[11] : wl2d[12]
-  const E = side === 'left' ? wl2d[13] : wl2d[14]
-  const H = side === 'left' ? wl2d[23] : wl2d[24]
-  if (!S || !E || !H) return null
-
-  // Vector from shoulder down to hip (torso reference = "straight down")
-  const torso = { x: H.x - S.x, y: H.y - S.y }
-  // Vector from shoulder to elbow (upper arm)
-  const arm   = { x: E.x - S.x, y: E.y - S.y }
-
-  const dot2d = torso.x * arm.x + torso.y * arm.y
-  const magT  = Math.sqrt(torso.x**2 + torso.y**2)
-  const magA  = Math.sqrt(arm.x**2 + arm.y**2)
-  if (magT < 0.001 || magA < 0.001) return null
-
-  const cosA = Math.max(-1, Math.min(1, dot2d / (magT * magA)))
-  return Math.round(Math.acos(cosA) * 180 / Math.PI)
-}
-
-export function calcJointAngle(joint, worldLandmarks, landmarks2d) {
+// Elbow / knee flexion: 0° = straight, increasing = more bent
+// Shoulder abduction: angle between torso (shoulder→hip) and upper arm
+//   0° = arm at side, 90° = arm horizontal, 180° = straight overhead
+export function calcJointAngle(joint, worldLandmarks) {
   if (!worldLandmarks) return null
-  switch(joint.type) {
-    case 'elbow':    return calcElbow(worldLandmarks, joint.side)
-    case 'knee':     return calcKnee(worldLandmarks, joint.side)
-    case 'shoulder': return calcShoulderAbduction(worldLandmarks, joint.side)
+  const L = joint.side === 'left'
+  let a = null
+  switch (joint.type) {
+    case 'elbow':    a = angle3(worldLandmarks, L?11:12, L?13:14, L?15:16); return a == null ? null : Math.round(180 - a)
+    case 'knee':     a = angle3(worldLandmarks, L?23:24, L?25:26, L?27:28); return a == null ? null : Math.round(180 - a)
+    case 'shoulder': a = angle3(worldLandmarks, L?13:14, L?11:12, L?23:24); return a == null ? null : Math.round(a)
     default: return null
   }
-}
-
-// ── Draw angle label + arc ────────────────────────────────────────────────────
-function drawAngleLabel(ctx, lm2d, joint, angle, canvasW, canvasH) {
-  // Get vertex landmark in 2D for positioning
-  let vidx
-  if (joint.type === 'elbow')    vidx = joint.side === 'left' ? 13 : 14
-  else if (joint.type === 'knee') vidx = joint.side === 'left' ? 25 : 26
-  else vidx = joint.side === 'left' ? 11 : 12  // shoulder
-
-  const vpt = lm2d[vidx]
-  if (!vpt) return
-
-  const vx = vpt.x * canvasW
-  const vy = vpt.y * canvasH
-
-  // Arc points for shoulder/elbow/knee
-  let ax, ay, bx2, by2
-  if (joint.type === 'elbow') {
-    const s = lm2d[joint.side === 'left' ? 11 : 12]
-    const w = lm2d[joint.side === 'left' ? 15 : 16]
-    if (s && w) {
-      ax = s.x * canvasW; ay = s.y * canvasH
-      bx2 = w.x * canvasW; by2 = w.y * canvasH
-    }
-  } else if (joint.type === 'knee') {
-    const h = lm2d[joint.side === 'left' ? 23 : 24]
-    const a = lm2d[joint.side === 'left' ? 27 : 28]
-    if (h && a) {
-      ax = h.x * canvasW; ay = h.y * canvasH
-      bx2 = a.x * canvasW; by2 = a.y * canvasH
-    }
-  } else {
-    // Shoulder — use elbow and hip
-    const e = lm2d[joint.side === 'left' ? 13 : 14]
-    const h = lm2d[joint.side === 'left' ? 23 : 24]
-    if (e && h) {
-      ax = e.x * canvasW; ay = e.y * canvasH
-      bx2 = h.x * canvasW; by2 = h.y * canvasH
-    }
-  }
-
-  const CYAN = '#00E5FF'
-  const radius = Math.min(canvasW, canvasH) * 0.028
-
-  ctx.save()
-
-  // Draw arc if we have both reference points
-  if (ax !== undefined) {
-    const angleA = Math.atan2(ay - vy, ax - vx)
-    const angleB = Math.atan2(by2 - vy, bx2 - vx)
-    ctx.strokeStyle = CYAN
-    ctx.lineWidth = 1.5
-    ctx.globalAlpha = 0.8
-    ctx.beginPath()
-    ctx.arc(vx, vy, radius, Math.min(angleA, angleB), Math.max(angleA, angleB))
-    ctx.stroke()
-  }
-
-  // Label — offset away from body
-  const offsetX = joint.side === 'left' ? -radius - 28 : radius + 10
-  const offsetY = joint.type === 'knee' ? -10 : -radius - 10
-  const lx = vx + offsetX
-  const ly = vy + offsetY
-
-  const label = joint.type === 'shoulder'
-    ? `${angle > 0 ? '+' : ''}${angle}°`
-    : `${angle}°`
-  const text = `${joint.name} ${label}`
-
-  ctx.globalAlpha = 1
-  ctx.font = `bold ${Math.max(10, canvasW * 0.012)}px 'Roboto Mono', monospace`
-  ctx.textAlign = joint.side === 'left' ? 'right' : 'left'
-  ctx.textBaseline = 'middle'
-
-  const tw = ctx.measureText(text).width
-  const px = joint.side === 'left' ? lx - tw - 2 : lx - 2
-  ctx.fillStyle = 'rgba(0,0,0,0.6)'
-  ctx.beginPath()
-  ctx.roundRect(px, ly - 9, tw + 8, 18, 4)
-  ctx.fill()
-
-  ctx.fillStyle = CYAN
-  ctx.fillText(text, lx, ly)
-  ctx.restore()
 }
 
 // Draw angle arc only (no label — label goes in floating table)
@@ -214,7 +91,7 @@ function drawAngleArc(ctx, lm2d, joint, canvasW, canvasH) {
   else if (joint.type === 'knee') vidx = joint.side === 'left' ? 25 : 26
   else vidx = joint.side === 'left' ? 11 : 12
 
-  const vpt = lm2d[vidx]; if (!vpt) return
+  const vpt = vis(lm2d[vidx]); if (!vpt) return
   const vx = vpt.x * canvasW, vy = vpt.y * canvasH
   let ax, ay, bx, by
 
@@ -251,11 +128,10 @@ function drawAngleArc(ctx, lm2d, joint, canvasW, canvasH) {
 export function drawPoseOverlay(ctx, landmarks, worldLandmarks, enabledAngles, canvasW, canvasH) {
   if (!landmarks || landmarks.length === 0) return
   const CYAN = '#00E5FF'
-  const MIN_VIS = 0.4
 
   const lm = (idx) => {
     const pt = landmarks[idx]
-    return (pt && pt.visibility >= MIN_VIS) ? pt : null
+    return vis(pt)
   }
 
   // Skeleton lines
@@ -296,69 +172,96 @@ export function drawPoseOverlay(ctx, landmarks, worldLandmarks, enabledAngles, c
   })
 }
 
-// ── MediaPipe Pose loader ────────────────────────────────────────────────────
-let poseInstance = null
-let poseReady    = false
-let poseCallbacks = []
+// ── MediaPipe PoseLandmarker (tasks-vision) ───────────────────────────────────
+// Heavy model for accuracy. IMAGE mode for the live/scrub view (no tracking state
+// carried across seeks), VIDEO mode for the frame-by-frame throw analysis.
 
-export function loadPose(onResults) {
-  return new Promise((resolve, reject) => {
-    if (poseInstance && poseReady) {
-      poseInstance.onResults(onResults)
-      resolve(poseInstance)
-      return
-    }
+// Bundled by the mediapipe-wasm plugin in vite.config.js
+const WASM_URL  = new URL('mediapipe-wasm', document.baseURI).href.replace(/\/$/, '')
+const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task'
 
-    // Load MediaPipe Pose via CDN — most reliable cross-browser approach
-    if (!document.getElementById('mediapipe-pose-script')) {
-      const script = document.createElement('script')
-      script.id  = 'mediapipe-pose-script'
-      script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js'
-      script.crossOrigin = 'anonymous'
-      document.head.appendChild(script)
+let filesetP = null
+const instances = {}   // mode -> Promise<PoseLandmarker>
+let videoTs = 0        // VIDEO mode needs strictly increasing timestamps
 
-      script.onload = () => initPose(onResults, resolve, reject)
-      script.onerror = () => reject(new Error('Failed to load MediaPipe Pose script'))
-    } else {
-      initPose(onResults, resolve, reject)
-    }
+async function create(mode, delegate) {
+  filesetP = filesetP || FilesetResolver.forVisionTasks(WASM_URL)
+  const fileset = await filesetP
+  return PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: mode,
+    numPoses: 1,
+    minPoseDetectionConfidence: 0.5,
+    minPosePresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
   })
 }
 
-function initPose(onResults, resolve, reject) {
-  try {
-    const pose = new window.Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+function getLandmarker(mode) {
+  if (!instances[mode]) {
+    instances[mode] = create(mode, 'GPU').catch(e => {
+      console.warn('[SparkQB] GPU pose failed, falling back to CPU:', e)
+      return create(mode, 'CPU')
     })
+    instances[mode].catch(() => { delete instances[mode] })
+  }
+  return instances[mode]
+}
 
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      smoothSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-      enableWorldLandmarks: true,  // required for 3D world coordinates
-    })
+export function loadPose() { return getLandmarker('IMAGE') }
 
-    pose.onResults((results) => {
-      console.log('[SparkQB] Pose results:', results.poseLandmarks ? `${results.poseLandmarks.length} landmarks` : 'no landmarks')
-      onResults(results)
-    })
+function toResult(r, crop) {
+  const lm = r?.landmarks?.[0] || null
+  const world = r?.worldLandmarks?.[0] || null
+  if (!lm) return { landmarks: null, worldLandmarks: null }
+  // landmarks come back normalized to the crop; map back to the full frame
+  const mapped = crop
+    ? lm.map(p => ({ ...p, x: crop.x + p.x * crop.w, y: crop.y + p.y * crop.h }))
+    : lm
+  // tasks-vision world landmarks can lack visibility; copy it from the 2D set
+  const w = world ? world.map((p, i) => ({ ...p, visibility: p.visibility ?? lm[i]?.visibility ?? 1 })) : null
+  return { landmarks: mapped, worldLandmarks: w }
+}
 
-    pose.initialize().then(() => {
-      console.log('[SparkQB] Pose initialized OK')
-      poseInstance = pose
-      poseReady    = true
-      resolve(pose)
-    }).catch(e => {
-      console.error('[SparkQB] Pose initialize failed:', e)
-      reject(e)
-    })
-  } catch(e) {
-    reject(e)
+// Freeze the current video frame into a canvas (capped resolution) so the
+// skeleton is computed on — and drawn over — exactly the same picture.
+export function snapshotFrame(video, canvas, maxSide = 1280) {
+  const vw = video.videoWidth, vh = video.videoHeight
+  if (!vw || !vh) return null
+  const k = Math.min(1, maxSide / Math.max(vw, vh))
+  const w = Math.round(vw * k), h = Math.round(vh * k)
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h }
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h)
+  return canvas
+}
+
+// crop: optional {x,y,w,h} in normalized coords — detect only inside it
+// (used when zoomed in, so a small QB on game film gets more pixels).
+let cropCanvas = null
+function sourceFor(src, crop) {
+  if (!crop) return src
+  const vw = src.videoWidth || src.width, vh = src.videoHeight || src.height
+  const sw = Math.max(16, Math.round(crop.w * vw)), sh = Math.max(16, Math.round(crop.h * vh))
+  cropCanvas = cropCanvas || document.createElement('canvas')
+  if (cropCanvas.width !== sw || cropCanvas.height !== sh) { cropCanvas.width = sw; cropCanvas.height = sh }
+  cropCanvas.getContext('2d').drawImage(src, crop.x * vw, crop.y * vh, sw, sh, 0, 0, sw, sh)
+  return cropCanvas
+}
+
+export async function detectFrame(src, crop = null) {
+  const lmk = await getLandmarker('IMAGE')
+  return toResult(lmk.detect(sourceFor(src, crop)), crop)
+}
+
+// Start a new VIDEO-mode run; returns a per-frame detector (src, frameTimeSec, crop) -> result
+export async function startVideoRun() {
+  const lmk = await getLandmarker('VIDEO')
+  const base = videoTs + 10000   // gap so tracking doesn't bridge two runs
+  return (src, frameTimeSec, crop = null) => {
+    const ts = Math.max(videoTs + 1, Math.round(base + frameTimeSec * 1000))
+    videoTs = ts
+    return toResult(lmk.detectForVideo(sourceFor(src, crop), ts), crop)
   }
 }
 
-export function getPoseInstance() { return poseInstance }
 export { POSE_LANDMARKS }
