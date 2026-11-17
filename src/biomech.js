@@ -7,6 +7,7 @@ export const L = {
   NOSE: 0,
   L_SH: 11, R_SH: 12, L_EL: 13, R_EL: 14, L_WR: 15, R_WR: 16,
   L_HIP: 23, R_HIP: 24, L_KN: 25, R_KN: 26, L_AN: 27, R_AN: 28,
+  L_HEEL: 29, R_HEEL: 30, L_TOE: 31, R_TOE: 32,
 }
 const USED = Object.values(L)
 const MIN_VIS = 0.5
@@ -130,11 +131,12 @@ export function resampleUniform(frames, fps) {
   const t0 = src[0].t, t1 = src[src.length - 1].t
   const n = Math.floor((t1 - t0) * fps + 1e-6) + 1
   const grid = Array.from({ length: n }, (_, i) => t0 + i / fps)
-  const out = grid.map(t => ({ t, world: null }))
+  const out = grid.map(t => ({ t, world: null, lm2d: null }))
   const ts = src.map(f => f.t)
-  USED.forEach(li => {
+  for (const key of ['world', 'lm2d']) USED.forEach(li => {
     ;['x', 'y', 'z'].forEach(k => {
-      const raw = src.map(f => { const p = f.world?.[li]; return p && (p.visibility ?? 1) >= MIN_VIS ? p[k] : NaN })
+      // visibility always comes from the 2D set
+      const raw = src.map(f => { const p = f[key]?.[li], q = f.lm2d?.[li] ?? p; return p && (q?.visibility ?? 1) >= MIN_VIS ? p[k] : NaN })
       if (raw.filter(Number.isFinite).length < 2) return
       let j = 0
       grid.forEach((t, gi) => {
@@ -150,9 +152,9 @@ export function resampleUniform(frames, fps) {
         else if (Number.isFinite(raw[b]) && Math.abs(ts[b] - t) < 0.6 / fps) v = raw[b]
         if (!Number.isFinite(v)) return
         const o = out[gi]
-        o.world = o.world || []
-        o.world[li] = o.world[li] || { x: NaN, y: NaN, z: NaN, visibility: 1 }
-        o.world[li][k] = v
+        o[key] = o[key] || []
+        o[key][li] = o[key][li] || { x: NaN, y: NaN, z: NaN, visibility: 1 }
+        o[key][li][k] = v
       })
     })
   })
@@ -205,6 +207,36 @@ export function elbowFlexion(w, side) {
   return 180 - Math.acos(Math.max(-1, Math.min(1, dot(a, b)))) * DEG
 }
 
+// Knee flexion: 0° = straight
+export function kneeFlexion(w, side) {
+  const H = w[side === 'left' ? L.L_HIP : L.R_HIP], K = w[side === 'left' ? L.L_KN : L.R_KN], A = w[side === 'left' ? L.L_AN : L.R_AN]
+  if (![H, K, A].every(isNum)) return NaN
+  const a = unit(sub(H, K)), b = unit(sub(A, K)); if (!a || !b) return NaN
+  return 180 - Math.acos(Math.max(-1, Math.min(1, dot(a, b)))) * DEG
+}
+
+// Shoulder abduction: humerus vs trunk-down. 90° = arm level with shoulders.
+export function shoulderAbduction(w, side, tf = trunkFrame(w)) {
+  if (!tf) return NaN
+  const S = w[side === 'left' ? L.L_SH : L.R_SH], E = w[side === 'left' ? L.L_EL : L.R_EL]
+  if (![S, E].every(isNum)) return NaN
+  const h = unit(sub(E, S)); if (!h) return NaN
+  return Math.acos(Math.max(-1, Math.min(1, dot(h, scale(tf.up, -1))))) * DEG
+}
+
+// Trunk tilt from vertical (camera y is down): forward (+) / toward glove side (+)
+export function trunkTilt(tf, side) {
+  if (!tf) return { forward: NaN, lateral: NaN }
+  const vert = { x: 0, y: -1, z: 0 }
+  const horiz = v => unit({ x: v.x, y: 0, z: v.z })
+  const fH = horiz(tf.fwd), lH = horiz(tf.lat)
+  if (!fH || !lH) return { forward: NaN, lateral: NaN }
+  const forward = Math.atan2(dot(tf.up, fH), dot(tf.up, vert)) * DEG
+  // lat points L→R; for a right-hander the glove side is left
+  const lat = Math.atan2(dot(tf.up, lH), dot(tf.up, vert)) * DEG
+  return { forward, lateral: side === 'right' ? -lat : lat }
+}
+
 // Yaw of a left→right segment about the camera-vertical axis (y), degrees.
 // Single-camera depth (z) is compressed and jittery, while x/y are reliable.
 // So depth is rebuilt from the segment's true length (Taylor method):
@@ -247,7 +279,8 @@ export function bodyScale(frames, heightM) {
  * @param opts { fps, side: 'right'|'left', heightM, separationIdx?, releaseIdx? }
  */
 export function analyzeThrow(rawFrames, opts) {
-  const { fps, side = 'right', heightM = 1.854 } = opts
+  const { fps, side = 'right', heightM = 1.854, aspect = 16 / 9 } = opts
+  const lead = side === 'right' ? 'left' : 'right'
   rawFrames = resampleUniform(rawFrames, fps)
   const n = rawFrames.length
   if (n < 5) return { error: 'Not enough frames analyzed.' }
@@ -330,6 +363,42 @@ export function analyzeThrow(rawFrames, opts) {
   }
   const separationIdx = Number.isInteger(opts.separationIdx) ? opts.separationIdx : (separationAuto >= 0 ? separationAuto : null)
 
+  // Foot strike: measured in body coordinates (immune to camera pans/zooms).
+  // The stride is the biggest burst of ankle-to-ankle separation speed before
+  // MER; lift / strike are where that burst rises above / falls below 25% of
+  // its peak. (The planted foot still pivots, so it never goes fully still.)
+  const ankleGap = frames.map(({ world: w }) => isNum(w[L.L_AN]) && isNum(w[L.R_AN]) ? mag(sub(w[L.L_AN], w[L.R_AN])) * k : NaN)
+  const footSpeed = derivative(lowpass(fillGaps(ankleGap), fps, Math.min(6, fps * 0.3)), t)   // m/s, + = widening
+  let footStrikeAuto = -1, footLiftAuto = -1
+  const mer0 = merAuto >= 0 ? merAuto : releaseIdx
+  if (mer0 > 0 && footSpeed.some(Number.isFinite)) {
+    const lo = Math.max(0, releaseIdx - ms(900))
+    const pk = argmax(footSpeed, lo, mer0 - ms(30))
+    if (pk >= 0 && footSpeed[pk] > 0.3) {
+      const thr = footSpeed[pk] * 0.25
+      let i = pk; while (i < mer0 && footSpeed[i] >= thr) i++
+      footStrikeAuto = i
+      let j = pk; while (j > lo && footSpeed[j] >= thr) j--
+      footLiftAuto = j > lo ? j : -1
+    }
+  }
+  const footStrikeIdx = Number.isInteger(opts.footStrikeIdx) ? opts.footStrikeIdx : (footStrikeAuto >= 0 ? footStrikeAuto : null)
+
+  // Joint angles at events
+  const leadKnee = frames.map(f => kneeFlexion(f.world, lead))
+  const abd = frames.map((f, i) => shoulderAbduction(f.world, side, tfs[i]))
+  const tilt = tfs.map(tf => trunkTilt(tf, side))
+  const snap = i => (i == null || i < 0) ? null : {
+    leadKnee: leadKnee[i], elbow: elbow[i], abduction: abd[i], er: er[i],
+    trunkForward: tilt[i].forward, trunkLateral: tilt[i].lateral, separation: separation[i],
+  }
+  // Stride: ankle-to-ankle distance at foot strike, as % of height
+  let strideLen = null
+  if (footStrikeIdx != null) {
+    const w = frames[footStrikeIdx].world, a = w[L.L_AN], b = w[L.R_AN]
+    if (isNum(a) && isNum(b)) strideLen = mag(sub(a, b)) * k / heightM * 100
+  }
+
   // ── Metrics ──
   const winLo = separationIdx ?? Math.max(0, releaseIdx - Math.round(fps * 0.6))
   const winHi = releaseIdx
@@ -357,11 +426,13 @@ export function analyzeThrow(rawFrames, opts) {
 
   return {
     n, t, fps, side, scale: k,
-    series: { er, elbow, pelvisYaw, torsoYaw, pelvisVel, torsoVel, separation, handSpeed, wristGap },
+    series: { footSpeed, leadKnee, er, elbow, pelvisYaw, torsoYaw, pelvisVel, torsoVel, separation, handSpeed, wristGap },
     events: {
       separation: separationIdx, separationAuto: separationAuto >= 0 ? separationAuto : null,
       release: releaseIdx >= 0 ? releaseIdx : null, releaseAuto: releaseAuto >= 0 ? releaseAuto : null,
       mer: merIdx >= 0 ? merIdx : null,
+      footStrike: footStrikeIdx, footStrikeAuto: footStrikeAuto >= 0 ? footStrikeAuto : null,
+      footLift: footLiftAuto >= 0 ? footLiftAuto : null,
       pelvisPeak: pelvisPeakIdx, torsoPeak: torsoPeakIdx, handPeak: handPeakIdx, sepPeak: sepPeakIdx,
     },
     metrics: {
@@ -372,6 +443,14 @@ export function analyzeThrow(rawFrames, opts) {
       torsoPeak:    at(torsoVel, torsoPeakIdx) != null ? Math.abs(torsoVel[torsoPeakIdx]) : null,
       maxSeparation: at(separation, sepPeakIdx) != null ? Math.abs(separation[sepPeakIdx]) : null,
       sequenceOk,
+      hipTorsoGapMs: pelvisPeakIdx >= 0 && torsoPeakIdx >= 0 ? (t[torsoPeakIdx] - t[pelvisPeakIdx]) * 1000 : null,
+      strideLenPct: strideLen,
+      strideTimeMs: footLiftAuto >= 0 && footStrikeIdx != null ? (t[footStrikeIdx] - t[footLiftAuto]) * 1000 : null,
+      plantToReleaseMs: footStrikeIdx != null && releaseIdx >= 0 ? (t[releaseIdx] - t[footStrikeIdx]) * 1000 : null,
+      merToReleaseMs: merIdx >= 0 && releaseIdx >= 0 ? (t[releaseIdx] - t[merIdx]) * 1000 : null,
+      atFootStrike: snap(footStrikeIdx),
+      atMer: snap(merIdx),
+      atRelease: snap(releaseIdx),
     },
     notes,
   }

@@ -765,7 +765,8 @@ export default function App() {
   function runMetrics(raw, overrides = {}) {
     return analyzeThrow(raw, {
       fps: realFps, side: throwSide, heightM: heightIn * 0.0254,
-      separationIdx: overrides.separation, releaseIdx: overrides.release,
+      separationIdx: overrides.separation, releaseIdx: overrides.release, footStrikeIdx: overrides.footStrike,
+      aspect: videoMeta ? videoMeta.w / videoMeta.h : 16 / 9,
     })
   }
 
@@ -851,6 +852,8 @@ export default function App() {
     const vt = idxToVt(a, i)
     v.currentTime = vt; setCurrentT(vt)
   }
+  useEffect(() => { requestAnimationFrame(() => layout()) }, [showThrow])
+
   function clearAnalysis() { analysisRef.current = null; setAnalysis(null); poseWantT.current = -1 }
 
   // Toggle tracking on a blur shape
@@ -1207,6 +1210,190 @@ export default function App() {
     (tool === 'blur' ? shapes.filter(s => s.type === 'blur').slice(-1)[0]?.id : null)
   const activeBlurShape = shapes.find(s => s.id === activeBlurId)
 
+
+  // ── Throw analysis side panel ─────────────────────────────────────────────────
+  function renderThrowPanel() {
+    const res = analysis?.result
+    const m = res?.metrics, ev = res?.events
+    const ok = res && !res.error
+    const num = (v, d = 0) => v == null || !Number.isFinite(v) ? null : v.toFixed(d)
+    const fmtT = i => (i == null || !ok) ? '–' : `${idxToVt(analysis, i).toFixed(3)}s`
+
+    const Metric = ({ label, value, unit, idx, sub }) => (
+      <button className="tp-metric" onClick={() => jumpToIdx(idx)} disabled={idx == null || idx < 0}
+        title={idx != null && idx >= 0 ? 'Jump to this frame' : undefined}>
+        <span className="tp-mlabel">{label}</span>
+        <span className="tp-mval">{value ?? '–'}{value != null && <small>{unit}</small>}</span>
+        {sub && <span className="tp-msub">{sub}</span>}
+      </button>
+    )
+
+    let graph = null
+    if (ok) {
+      const W = 300, H = 90, n = res.t.length
+      const pv = res.series.pelvisVel, tv = res.series.torsoVel
+      const finite = a => a.map(Math.abs).filter(Number.isFinite)
+      const maxV = Math.max(200, ...finite(pv), ...finite(tv))
+      const X = i => (i / Math.max(1, n - 1)) * W
+      const Y = v => H / 2 - (v / maxV) * (H / 2 - 6)
+      const line = arr => arr.map((v, i) => Number.isFinite(v) ? `${X(i).toFixed(1)},${Y(v).toFixed(1)}` : null).filter(Boolean).join(' ')
+      const ci = vtToIdx(analysis, currentT)
+      const mark = (i, c) => i != null && i >= 0 ? <line x1={X(i)} x2={X(i)} y1={0} y2={H} stroke={c} strokeDasharray="3 3" strokeWidth="1.2"/> : null
+      graph = (
+        <div className="tp-graph">
+          <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+            onClick={e => { const r = e.currentTarget.getBoundingClientRect(); jumpToIdx(Math.round((e.clientX - r.left) / r.width * (n - 1))) }}>
+            <line x1="0" x2={W} y1={H/2} y2={H/2} stroke="rgba(255,255,255,0.15)"/>
+            {mark(ev.footStrike, '#B388FF')}
+            {mark(ev.separation, '#FFD54F')}
+            {mark(ev.mer, '#FF5252')}
+            {mark(ev.release, '#69F0AE')}
+            <polyline points={line(pv)} fill="none" stroke="#FF9100" strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>
+            <polyline points={line(tv)} fill="none" stroke="#00E5FF" strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>
+            {ci >= 0 && <line x1={X(ci)} x2={X(ci)} y1={0} y2={H} stroke="#fff" strokeWidth="1.4" vectorEffect="non-scaling-stroke"/>}
+          </svg>
+          <div className="tp-legend">
+            <span><i style={{background:'#FF9100'}}/>Pelvis °/s</span>
+            <span><i style={{background:'#00E5FF'}}/>Torso °/s</span>
+            <span><i className="dash" style={{borderColor:'#B388FF'}}/>Foot strike</span>
+            <span><i className="dash" style={{borderColor:'#FFD54F'}}/>Separation</span>
+            <span><i className="dash" style={{borderColor:'#FF5252'}}/>MER</span>
+            <span><i className="dash" style={{borderColor:'#69F0AE'}}/>Release</span>
+          </div>
+        </div>
+      )
+    }
+
+    const posRows = [
+      ['Lead knee bend', 'leadKnee'],
+      ['Elbow bend', 'elbow'],
+      ['Shoulder abduction', 'abduction'],
+      ['Shoulder ER', 'er'],
+      ['Trunk forward tilt', 'trunkForward'],
+      ['Trunk side tilt', 'trunkLateral'],
+    ]
+
+    return (
+      <aside className="throw-panel" onClick={e => e.stopPropagation()}>
+        <div className="tp-head">
+          <span>THROW ANALYSIS</span>
+          <button className="tp-x" onClick={() => setShowThrow(false)} title="Close">×</button>
+        </div>
+
+        <section className="tp-section">
+          <div className="tp-field">
+            <span className="tp-lbl">Throwing arm</span>
+            <div className="tp-seg">
+              {['right','left'].map(sd => <button key={sd} className={throwSide===sd?'on':''} onClick={() => setThrowSide(sd)}>{sd==='right'?'Right':'Left'}</button>)}
+            </div>
+          </div>
+          <div className="tp-field">
+            <span className="tp-lbl">Player height</span>
+            <select className="tp-sel" value={heightIn} onChange={e => setHeightIn(+e.target.value)}>
+              {Array.from({length: 25}, (_, i) => 62 + i).map(h => <option key={h} value={h}>{Math.floor(h/12)}'{h%12}"</option>)}
+            </select>
+          </div>
+          <div className="tp-field">
+            <span className="tp-lbl">File frame rate</span>
+            <select className="tp-sel" value={fileFps} onChange={e => setFpsOverride(+e.target.value)}>
+              {[24,25,30,50,60,120,240].map(f => <option key={f} value={f}>{f} fps</option>)}
+              {![24,25,30,50,60,120,240].includes(fileFps) && <option value={fileFps}>{fileFps} fps</option>}
+            </select>
+          </div>
+          <div className="tp-field">
+            <span className="tp-lbl">Slow-mo export</span>
+            <select className="tp-sel" value={slowmo} onChange={e => setSlowmo(+e.target.value)}>
+              {[1,2,4,8].map(f => <option key={f} value={f}>{f === 1 ? 'No' : `${f}× slowed`}</option>)}
+            </select>
+          </div>
+          <p className="tp-hint">Real capture rate: {Math.round(realFps)} fps</p>
+        </section>
+
+        <section className="tp-section">
+          {anaProgress != null ? (
+            <div className="tp-progress">
+              <div className="tp-bar"><div style={{ width: `${Math.round(anaProgress*100)}%` }}/></div>
+              <span className="tp-pct">{Math.round(anaProgress*100)}%</span>
+              <button className="tp-btn sec" onClick={() => { anaCancel.current = true }}>Cancel</button>
+            </div>
+          ) : (
+            <div className="tp-actions">
+              <button className="tp-btn" onClick={analyzeThrowClip}>{analysis ? 'RE-ANALYZE' : 'ANALYZE THROW'}</button>
+              {analysis && <button className="tp-btn sec" onClick={clearAnalysis}>Clear</button>}
+            </div>
+          )}
+          {!analysis && anaProgress == null && <p className="tp-hint">Scrub to about the release frame, then tap Analyze. It reads 1.2s before to 0.4s after. If the QB is small in the frame, zoom in on them first.</p>}
+          {res?.error && <p className="tp-warn">{res.error}</p>}
+        </section>
+
+        {ok && <>
+          <section className="tp-section">
+            <h4 className="tp-h">Key events</h4>
+            {[['footStrike','Foot strike','#B388FF'],['separation','Hand separation','#FFD54F'],['release','Release','#69F0AE']].map(([k, label, c]) => (
+              <div key={k} className="tp-event">
+                <span className="tp-dot" style={{ background: c }}/>
+                <button className="tp-elabel" onClick={() => jumpToIdx(ev[k])}>
+                  {label}<b>{fmtT(ev[k])}</b>
+                  <em>{analysis.overrides[k] != null ? 'set' : 'auto'}</em>
+                </button>
+                <button className="tp-mini" onClick={() => setEventHere(k)} title="Set to current frame">Set here</button>
+                {analysis.overrides[k] != null && <button className="tp-mini" onClick={() => resetEvent(k)}>Auto</button>}
+              </div>
+            ))}
+          </section>
+
+          <section className="tp-section">
+            <h4 className="tp-h">Speed &amp; timing</h4>
+            <div className="tp-grid">
+              <Metric label="Arm speed" value={num(m.handSpeedMph, 1)} unit="mph" idx={ev.handPeak}/>
+              <Metric label="Release time" value={num(m.releaseTime != null ? m.releaseTime * 1000 : null)} unit="ms" idx={ev.separation} sub="Hand separation → release"/>
+              <Metric label="Peak pelvis" value={num(m.pelvisPeak)} unit="°/s" idx={ev.pelvisPeak}/>
+              <Metric label="Peak torso" value={num(m.torsoPeak)} unit="°/s" idx={ev.torsoPeak}/>
+              <Metric label="Foot strike → release" value={num(m.plantToReleaseMs)} unit="ms" idx={ev.footStrike}/>
+              <Metric label="MER → release" value={num(m.merToReleaseMs)} unit="ms" idx={ev.mer}/>
+            </div>
+            {m.sequenceOk != null && (
+              <p className={`tp-seq ${m.sequenceOk ? 'ok' : 'bad'}`}>
+                {m.sequenceOk ? '✓ Pelvis peaks before torso' : '✗ Torso peaks before pelvis'}
+                {m.hipTorsoGapMs != null && <span> · {Math.abs(Math.round(m.hipTorsoGapMs))} ms apart</span>}
+              </p>
+            )}
+            {graph}
+          </section>
+
+          <section className="tp-section">
+            <h4 className="tp-h">Mechanics</h4>
+            <div className="tp-grid">
+              <Metric label="MER (est.)" value={num(m.mer)} unit="°" idx={ev.mer}/>
+              <Metric label="Hip-shoulder sep" value={num(m.maxSeparation)} unit="°" idx={ev.sepPeak}/>
+              <Metric label="Stride length" value={num(m.strideLenPct)} unit="% ht" idx={ev.footStrike}/>
+              <Metric label="Stride time" value={num(m.strideTimeMs)} unit="ms" idx={ev.footLift}/>
+            </div>
+          </section>
+
+          <section className="tp-section">
+            <h4 className="tp-h">Positions</h4>
+            <table className="tp-table">
+              <thead><tr><th/><th><button onClick={() => jumpToIdx(ev.footStrike)}>Foot strike</button></th><th><button onClick={() => jumpToIdx(ev.mer)}>MER</button></th><th><button onClick={() => jumpToIdx(ev.release)}>Release</button></th></tr></thead>
+              <tbody>
+                {posRows.map(([label, key]) => (
+                  <tr key={key}>
+                    <td>{label}</td>
+                    {['atFootStrike','atMer','atRelease'].map(at => <td key={at}>{num(m[at]?.[key]) != null ? `${num(m[at][key])}°` : '–'}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+          <section className="tp-section tp-notes">
+            {res.notes.map((nt, i) => <p key={i} className="tp-note">{nt}</p>)}
+          </section>
+        </>}
+      </aside>
+    )
+  }
+
   if (!unlocked) return <LeadGate onUnlock={() => setUnlocked(true)} />
 
   return (
@@ -1236,13 +1423,13 @@ export default function App() {
             disabled={poseStatus === 'loading'}>
             {poseStatus === 'loading'
               ? <><span className="spin">⟳</span> POSE…</>
-              : <><I d="M12 2a5 5 0 015 5 5 5 0 01-5 5 5 5 0 01-5-5 5 5 0 015-5M5 20a7 7 0 0114 0" size={16}/> JOINTS</>
+              : <><I d="M12 2a5 5 0 015 5 5 5 0 01-5 5 5 5 0 01-5-5 5 5 0 015-5M5 20a7 7 0 0114 0" size={16}/><span className="btn-label">JOINTS</span></>
             }
           </button>
 
           <button className={`pose-btn ${showThrow ? 'active' : ''}`}
             onClick={() => setShowThrow(v => !v)} title="QB throw analysis" disabled={!videoMeta}>
-            <I d="M4 20L20 4M14 4h6v6" size={16}/> THROW
+            <I d="M4 20L20 4M14 4h6v6" size={16}/><span className="btn-label">ANALYZE THROW</span>
           </button>
 
           <button className="load-btn" onClick={() => fileRef.current?.click()}>
@@ -1252,6 +1439,8 @@ export default function App() {
         </div>
       </header>
 
+      <div className="workspace">
+      <div className="main-col">
       {/* Stage */}
       <div className="stage" ref={wrapRef}
         onWheel={e => {
@@ -1517,14 +1706,18 @@ export default function App() {
 
         </div>
       )}
+      </div>{/* end main-col */}
+      {showThrow && videoMeta && renderThrowPanel()}
+      </div>{/* end workspace */}
 
       <video ref={vidRef} style={{display:'none'}} playsInline loop muted onEnded={() => setPlaying(false)}/>
       <input ref={fileRef} type="file" accept="video/*" style={{display:'none'}} onChange={onFileLoad}/>
 
       {/* Floating joint angle table — draggable, inline toggles */}
       {poseEnabled && (() => {
-        const defaultX = window.innerWidth - 220
-        const defaultY = window.innerHeight - 320
+        // top-left of the stage, clear of the docked throw panel
+        const defaultX = 12
+        const defaultY = 64
         const tx = tablePos.x ?? defaultX
         const ty = tablePos.y ?? defaultY
         return (
@@ -1589,135 +1782,6 @@ export default function App() {
       })()}
 
 
-
-      {/* QB throw analysis panel */}
-      {showThrow && videoMeta && (() => {
-        const tx = throwPos.x ?? 12
-        const ty = throwPos.y ?? 70
-        const res = analysis?.result
-        const m = res?.metrics, ev = res?.events
-        const fmtT = i => (i == null || !analysis?.result?.t) ? '–' : `${idxToVt(analysis, i).toFixed(3)}s`
-        const startDrag = (cx, cy, isTouch) => {
-          const sx = cx - tx, sy = cy - ty
-          const mv = ev2 => { const p = isTouch ? ev2.touches[0] : ev2; setThrowPos({ x: p.clientX - sx, y: p.clientY - sy }) }
-          const up = () => { window.removeEventListener(isTouch?'touchmove':'mousemove', mv); window.removeEventListener(isTouch?'touchend':'mouseup', up) }
-          window.addEventListener(isTouch?'touchmove':'mousemove', mv); window.addEventListener(isTouch?'touchend':'mouseup', up)
-        }
-        const Metric = ({ label, value, unit, idx, hint }) => (
-          <button className="tp-metric" onClick={() => jumpToIdx(idx)} title={hint || 'Jump to frame'} disabled={idx == null || idx < 0}>
-            <span className="tp-mlabel">{label}</span>
-            <span className="tp-mval">{value == null ? '–' : value}<small>{value == null ? '' : unit}</small></span>
-          </button>
-        )
-        // velocity graph
-        let graph = null
-        if (res && !res.error) {
-          const W = 260, H = 70, t = res.t, n = t.length
-          const pv = res.series.pelvisVel, tv = res.series.torsoVel
-          const maxV = Math.max(200, ...pv.map(Math.abs).filter(Number.isFinite), ...tv.map(Math.abs).filter(Number.isFinite))
-          const X = i => (i / Math.max(1, n - 1)) * W
-          const Y = v => H / 2 - (v / maxV) * (H / 2 - 4)
-          const line = arr => arr.map((v, i) => Number.isFinite(v) ? `${X(i).toFixed(1)},${Y(v).toFixed(1)}` : null).filter(Boolean).join(' ')
-          const ci = vtToIdx(analysis, currentT)
-          const mark = (i, c) => i != null && i >= 0 ? <line x1={X(i)} x2={X(i)} y1={0} y2={H} stroke={c} strokeDasharray="3 3" strokeWidth="1"/> : null
-          graph = (
-            <div className="tp-graph">
-              <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}
-                onClick={e => { const r = e.currentTarget.getBoundingClientRect(); jumpToIdx(Math.round((e.clientX - r.left) / r.width * (n - 1))) }}>
-                <line x1="0" x2={W} y1={H/2} y2={H/2} stroke="rgba(255,255,255,0.15)"/>
-                {mark(ev.separation, '#FFD54F')}
-                {mark(ev.mer, '#FF5252')}
-                {mark(ev.release, '#69F0AE')}
-                <polyline points={line(pv)} fill="none" stroke="#FF9100" strokeWidth="1.6"/>
-                <polyline points={line(tv)} fill="none" stroke="#00E5FF" strokeWidth="1.6"/>
-                {ci >= 0 && <line x1={X(ci)} x2={X(ci)} y1={0} y2={H} stroke="#fff" strokeWidth="1.2"/>}
-              </svg>
-              <div className="tp-legend">
-                <span style={{color:'#FF9100'}}>● pelvis °/s</span>
-                <span style={{color:'#00E5FF'}}>● torso °/s</span>
-                <span style={{color:'#FFD54F'}}>┆sep</span>
-                <span style={{color:'#FF5252'}}>┆MER</span>
-                <span style={{color:'#69F0AE'}}>┆rel</span>
-              </div>
-            </div>
-          )
-        }
-        return (
-          <div className="throw-panel" style={{ left: tx, top: ty }} onClick={e => e.stopPropagation()}>
-            <div className="joint-table-head"
-              onMouseDown={e => startDrag(e.clientX, e.clientY, false)}
-              onTouchStart={e => startDrag(e.touches[0].clientX, e.touches[0].clientY, true)}>
-              <span>THROW ANALYSIS</span>
-              <button className="tp-x" onClick={() => setShowThrow(false)}>×</button>
-            </div>
-
-            <div className="tp-row">
-              <span className="tp-lbl">Arm</span>
-              <div className="tp-seg">
-                {['right','left'].map(sd => <button key={sd} className={throwSide===sd?'on':''} onClick={() => setThrowSide(sd)}>{sd==='right'?'RH':'LH'}</button>)}
-              </div>
-              <span className="tp-lbl">Ht</span>
-              <select className="tp-sel" value={heightIn} onChange={e => setHeightIn(+e.target.value)}>
-                {Array.from({length: 25}, (_, i) => 62 + i).map(h => <option key={h} value={h}>{Math.floor(h/12)}'{h%12}"</option>)}
-              </select>
-            </div>
-            <div className="tp-row">
-              <span className="tp-lbl">File fps</span>
-              <select className="tp-sel" value={fileFps} onChange={e => setFpsOverride(+e.target.value)}>
-                {[24,25,30,50,60,120,240].map(f => <option key={f} value={f}>{f}</option>)}
-                {![24,25,30,50,60,120,240].includes(fileFps) && <option value={fileFps}>{fileFps}</option>}
-              </select>
-              <span className="tp-lbl">Slo-mo</span>
-              <select className="tp-sel" value={slowmo} onChange={e => setSlowmo(+e.target.value)}>
-                {[1,2,4,8].map(f => <option key={f} value={f}>{f === 1 ? 'off' : `${f}×`}</option>)}
-              </select>
-            </div>
-            <div className="tp-hint">Real capture rate: {Math.round(realFps)}fps. If the clip is a slow-motion export that plays slowed down, set Slo-mo.</div>
-
-            {anaProgress != null ? (
-              <div className="tp-progress">
-                <div className="tp-bar"><div style={{ width: `${Math.round(anaProgress*100)}%` }}/></div>
-                <button className="tp-btn sec" onClick={() => { anaCancel.current = true }}>Cancel</button>
-              </div>
-            ) : (
-              <div className="tp-row">
-                <button className="tp-btn" onClick={analyzeThrowClip}>{analysis ? 'RE-ANALYZE' : 'ANALYZE THROW'}</button>
-                {analysis && <button className="tp-btn sec" onClick={clearAnalysis}>Clear</button>}
-              </div>
-            )}
-            {!analysis && anaProgress == null && <div className="tp-hint">Scrub to about the release frame, then tap Analyze. It reads 1.2s before → 0.4s after. Zoom in on the QB first if they're small in the frame.</div>}
-
-            {res?.error && <div className="tp-warn">{res.error}</div>}
-            {res && !res.error && <>
-              <div className="tp-events">
-                {[['separation','Hand separation','#FFD54F'],['release','Release','#69F0AE']].map(([k, label, c]) => (
-                  <div key={k} className="tp-event">
-                    <span className="tp-dot" style={{ background: c }}/>
-                    <button className="tp-elabel" onClick={() => jumpToIdx(ev[k])}>{label} <b>{fmtT(ev[k])}</b>{analysis.overrides[k] != null ? ' (set)' : ' (auto)'}</button>
-                    <button className="tp-mini" onClick={() => setEventHere(k)} title="Set to current frame">set here</button>
-                    {analysis.overrides[k] != null && <button className="tp-mini" onClick={() => resetEvent(k)} title="Back to auto">auto</button>}
-                  </div>
-                ))}
-              </div>
-              <div className="tp-grid">
-                <Metric label="MER (est.)" value={m.mer != null ? Math.round(m.mer) : null} unit="°" idx={ev.mer}/>
-                <Metric label="Release time" value={m.releaseTime != null ? m.releaseTime.toFixed(2) : null} unit="s" idx={ev.separation} hint="Hand separation → release"/>
-                <Metric label="Hand speed" value={m.handSpeedMph != null ? m.handSpeedMph.toFixed(1) : null} unit="mph" idx={ev.handPeak}/>
-                <Metric label="Peak pelvis" value={m.pelvisPeak != null ? Math.round(m.pelvisPeak) : null} unit="°/s" idx={ev.pelvisPeak}/>
-                <Metric label="Peak torso" value={m.torsoPeak != null ? Math.round(m.torsoPeak) : null} unit="°/s" idx={ev.torsoPeak}/>
-                <Metric label="Hip-shoulder sep" value={m.maxSeparation != null ? Math.round(m.maxSeparation) : null} unit="°" idx={ev.sepPeak}/>
-              </div>
-              {m.sequenceOk != null && (
-                <div className={`tp-seq ${m.sequenceOk ? 'ok' : 'bad'}`}>
-                  {m.sequenceOk ? '✓ Sequence: pelvis peaks before torso' : '✗ Sequence: torso peaks before pelvis'}
-                </div>
-              )}
-              {graph}
-              {res.notes.map((nt, i) => <div key={i} className="tp-note">{nt}</div>)}
-            </>}
-          </div>
-        )
-      })()}
 
       {/* Player label modal */}
       {lblModal && (
