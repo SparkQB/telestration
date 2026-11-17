@@ -459,7 +459,9 @@ export function analyzeThrow(rawFrames, opts) {
     metrics: {
       mer:          at(er, merIdx),
       releaseTime:  separationIdx != null && releaseIdx >= 0 ? t[releaseIdx] - t[separationIdx] : null,
-      handSpeedMph: at(handSpeed, handPeakIdx) != null ? handSpeed[handPeakIdx] * 2.23694 : null,
+      // ×0.93: wrist speed read ~7% high vs SpinLab arm speed on all 4 reference
+      // throws (players' heights known); held-out error 7% → 4% with it
+      handSpeedMph: at(handSpeed, handPeakIdx) != null ? handSpeed[handPeakIdx] * 2.23694 * 0.93 : null,
       pelvisPeak:   at(pelvisVel, pelvisPeakIdx) != null ? Math.abs(pelvisVel[pelvisPeakIdx]) : null,
       torsoPeak:    at(torsoVel, torsoPeakIdx) != null ? Math.abs(torsoVel[torsoPeakIdx]) : null,
       maxSeparation: at(separation, sepPeakIdx) != null ? Math.abs(separation[sepPeakIdx]) : null,
