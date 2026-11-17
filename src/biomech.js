@@ -297,23 +297,28 @@ export function analyzeThrow(rawFrames, opts) {
   const OWR = side === 'left' ? L.R_WR : L.L_WR
 
   const tfs    = frames.map(f => trunkFrame(f.world))
-  // ER: rebuild the throwing arm's depth from its known segment lengths. At
-  // layback the forearm points away from the camera, and single-camera depth
-  // is compressed, so raw landmarks undercount ER.
+  // ER from raw landmarks drives event detection (MER/release timing).
   const SH = side === 'left' ? L.L_SH : L.R_SH, EL = side === 'left' ? L.L_EL : L.R_EL
-  const uaL = segLength(frames, SH, EL), faL = segLength(frames, EL, WR)
+  const er = frames.map((f, i) => shoulderER(f.world, side, tfs[i]))
+  // ER value with locked arm segment lengths: rebuild depth so the segment keeps
+  // its true length (single-camera depth is compressed, which undercounts ER
+  // when the forearm points away from the camera at layback).
+  //   armLock: 'none' | 'forearm' | 'both';  armLen: 'measured' | 'anthro'
+  // 'both' + measured: MER avg error 16% → 12% across 4 SpinLab throws
+  const armLock = opts.armLock ?? 'both', armLen = opts.armLen ?? 'measured'
+  const lenFor = (a, b, ratio) => armLen === 'anthro' ? ratio * heightM / k : segLength(frames, a, b)
+  const uaL = lenFor(SH, EL, 0.186), faL = lenFor(EL, WR, 0.146)
   const rebuild = (a, b, Ls) => {
     if (!isNum(a) || !isNum(b) || !(Ls > 0)) return b
     const dx = b.x - a.x, dy = b.y - a.y, dzRaw = b.z - a.z
     const dz = Math.sign(dzRaw || 1) * Math.sqrt(Math.max(dzRaw * dzRaw, Ls * Ls - dx * dx - dy * dy))
-    return { ...b, x: a.x + dx, y: a.y + dy, z: a.z + dz }
+    return { ...b, z: a.z + dz }
   }
-  // Off by default: across 4 reference throws it helped one and hurt others
-  const armFix = opts.armDepth ?? false
-  const er     = frames.map((f, i) => {
-    if (!armFix) return shoulderER(f.world, side, tfs[i])
+  const erLocked = armLock === 'none' ? er : frames.map((f, i) => {
     const w = f.world.slice()
-    w[EL] = rebuild(w[SH], w[EL], uaL)
+    if (armLock === 'both') w[EL] = rebuild(w[SH], w[EL], uaL)
+    const shift = { x: w[EL].x - f.world[EL].x, y: w[EL].y - f.world[EL].y, z: w[EL].z - f.world[EL].z }
+    w[WR] = isNum(w[WR]) ? { ...w[WR], x: w[WR].x + shift.x, y: w[WR].y + shift.y, z: w[WR].z + shift.z } : w[WR]
     w[WR] = rebuild(w[EL], w[WR], faL)
     return shoulderER(w, side, tfs[i])
   })
@@ -324,8 +329,13 @@ export function analyzeThrow(rawFrames, opts) {
   const useTaylor = opts.taylor ?? true
   const hipL = useTaylor ? segLength(frames, L.L_HIP, L.R_HIP) : 0
   const shL  = useTaylor ? segLength(frames, L.L_SH,  L.R_SH)  : 0
-  const pelvisYaw = lowpass(unwrapDeg(fillGaps(frames.map(f => yawOf(f.world[L.L_HIP], f.world[L.R_HIP], hipL)))), fps, rotFc)
-  const torsoYaw  = lowpass(unwrapDeg(fillGaps(frames.map(f => yawOf(f.world[L.L_SH],  f.world[L.R_SH],  shL)))), fps, rotFc)
+  // Pelvis note: alternatives tried against 4 SpinLab throws (2D-image hip
+  // width, knee line, hip/knee blend) all did no better — MediaPipe's hip
+  // points under-rotate, so pelvis speed stays flagged experimental.
+  const pelvisRaw = frames.map(f => yawOf(f.world[L.L_HIP], f.world[L.R_HIP], hipL))
+  const torsoRaw  = frames.map(f => yawOf(f.world[L.L_SH],  f.world[L.R_SH],  shL))
+  const pelvisYaw = lowpass(unwrapDeg(fillGaps(pelvisRaw)), fps, rotFc)
+  const torsoYaw  = lowpass(unwrapDeg(fillGaps(torsoRaw)),  fps, rotFc)
   const pelvisVel = derivative(pelvisYaw, t)
   const torsoVel  = derivative(torsoYaw, t)
   const separation = pelvisYaw.map((p, i) => wrap180(torsoYaw[i] - p))
@@ -457,7 +467,7 @@ export function analyzeThrow(rawFrames, opts) {
       pelvisPeak: pelvisPeakIdx, torsoPeak: torsoPeakIdx, handPeak: handPeakIdx, sepPeak: sepPeakIdx,
     },
     metrics: {
-      mer:          at(er, merIdx),
+      mer: merIdx >= 0 ? (() => { let v = -Infinity; for (let i = merIdx - ms(opts.merWin ?? 15); i <= merIdx + ms(opts.merWin ?? 15); i++) if (Number.isFinite(erLocked[i])) v = Math.max(v, erLocked[i]); return Number.isFinite(v) ? v : at(er, merIdx) })() : null,
       releaseTime:  separationIdx != null && releaseIdx >= 0 ? t[releaseIdx] - t[separationIdx] : null,
       // ×0.93: wrist speed read ~7% high vs SpinLab arm speed on all 4 reference
       // throws (players' heights known); held-out error 7% → 4% with it
