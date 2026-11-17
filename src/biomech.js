@@ -297,7 +297,26 @@ export function analyzeThrow(rawFrames, opts) {
   const OWR = side === 'left' ? L.R_WR : L.L_WR
 
   const tfs    = frames.map(f => trunkFrame(f.world))
-  const er     = frames.map((f, i) => shoulderER(f.world, side, tfs[i]))
+  // ER: rebuild the throwing arm's depth from its known segment lengths. At
+  // layback the forearm points away from the camera, and single-camera depth
+  // is compressed, so raw landmarks undercount ER.
+  const SH = side === 'left' ? L.L_SH : L.R_SH, EL = side === 'left' ? L.L_EL : L.R_EL
+  const uaL = segLength(frames, SH, EL), faL = segLength(frames, EL, WR)
+  const rebuild = (a, b, Ls) => {
+    if (!isNum(a) || !isNum(b) || !(Ls > 0)) return b
+    const dx = b.x - a.x, dy = b.y - a.y, dzRaw = b.z - a.z
+    const dz = Math.sign(dzRaw || 1) * Math.sqrt(Math.max(dzRaw * dzRaw, Ls * Ls - dx * dx - dy * dy))
+    return { ...b, x: a.x + dx, y: a.y + dy, z: a.z + dz }
+  }
+  // Off by default: across 4 reference throws it helped one and hurt others
+  const armFix = opts.armDepth ?? false
+  const er     = frames.map((f, i) => {
+    if (!armFix) return shoulderER(f.world, side, tfs[i])
+    const w = f.world.slice()
+    w[EL] = rebuild(w[SH], w[EL], uaL)
+    w[WR] = rebuild(w[EL], w[WR], faL)
+    return shoulderER(w, side, tfs[i])
+  })
   const elbow  = frames.map(f => elbowFlexion(f.world, side))
   // Segment orientation is noisier than position (depth jitter), so it gets
   // an extra, lower-cutoff pass before differentiating.
@@ -396,7 +415,9 @@ export function analyzeThrow(rawFrames, opts) {
   let strideLen = null
   if (footStrikeIdx != null) {
     const w = frames[footStrikeIdx].world, a = w[L.L_AN], b = w[L.R_AN]
-    if (isNum(a) && isNum(b)) strideLen = mag(sub(a, b)) * k / heightM * 100
+    // ×1.12: ankle-to-ankle reads a consistent ~11% short of SpinLab's stride
+    // across 4 reference throws (it still tracks rep-to-rep differences)
+    if (isNum(a) && isNum(b)) strideLen = mag(sub(a, b)) * k / heightM * 100 * 1.12
   }
 
   // ── Metrics ──
@@ -421,7 +442,7 @@ export function analyzeThrow(rawFrames, opts) {
   const notes = []
   if (fps < 120) notes.push(`Video is ${Math.round(fps)}fps — speeds will read low. Film at 120–240fps for accurate speed numbers.`)
   notes.push('Rotation and MER use estimated depth from a single camera — best for comparing reps, not exact lab values.')
-  notes.push('Pelvis speed tends to read low (hip points are the hardest to track) — compare it rep-to-rep rather than to lab numbers.')
+  notes.push('Pelvis speed and hip-shoulder separation are experimental: hip points are the hardest to track, and pelvis speed reads well under lab values.')
   if (k > 1.6 || k < 0.6) notes.push('Body scale looks off — check the player height setting.')
 
   return {

@@ -1219,11 +1219,12 @@ export default function App() {
     const num = (v, d = 0) => v == null || !Number.isFinite(v) ? null : v.toFixed(d)
     const fmtT = i => (i == null || !ok) ? '–' : `${idxToVt(analysis, i).toFixed(3)}s`
 
-    const Metric = ({ label, value, unit, idx, sub }) => (
-      <button className="tp-metric" onClick={() => jumpToIdx(idx)} disabled={idx == null || idx < 0}
+    const Metric = ({ label, value, unit, idx, sub, exp }) => (
+      <button className={`tp-metric ${exp ? 'exp' : ''}`} onClick={() => jumpToIdx(idx)} disabled={idx == null || idx < 0}
         title={idx != null && idx >= 0 ? 'Jump to this frame' : undefined}>
         <span className="tp-mlabel">{label}</span>
         <span className="tp-mval">{value ?? '–'}{value != null && <small>{unit}</small>}</span>
+        {exp && <span className="tp-exp">Experimental</span>}
         {sub && <span className="tp-msub">{sub}</span>}
       </button>
     )
@@ -1347,7 +1348,7 @@ export default function App() {
             <div className="tp-grid">
               <Metric label="Arm speed" value={num(m.handSpeedMph, 1)} unit="mph" idx={ev.handPeak}/>
               <Metric label="Release time" value={num(m.releaseTime != null ? m.releaseTime * 1000 : null)} unit="ms" idx={ev.separation} sub="Hand separation → release"/>
-              <Metric label="Peak pelvis" value={num(m.pelvisPeak)} unit="°/s" idx={ev.pelvisPeak}/>
+              <Metric label="Peak pelvis" value={num(m.pelvisPeak)} unit="°/s" idx={ev.pelvisPeak} exp/>
               <Metric label="Peak torso" value={num(m.torsoPeak)} unit="°/s" idx={ev.torsoPeak}/>
               <Metric label="Foot strike → release" value={num(m.plantToReleaseMs)} unit="ms" idx={ev.footStrike}/>
               <Metric label="MER → release" value={num(m.merToReleaseMs)} unit="ms" idx={ev.mer}/>
@@ -1365,7 +1366,7 @@ export default function App() {
             <h4 className="tp-h">Mechanics</h4>
             <div className="tp-grid">
               <Metric label="MER (est.)" value={num(m.mer)} unit="°" idx={ev.mer}/>
-              <Metric label="Hip-shoulder sep" value={num(m.maxSeparation)} unit="°" idx={ev.sepPeak}/>
+              <Metric label="Hip-shoulder sep" value={num(m.maxSeparation)} unit="°" idx={ev.sepPeak} exp/>
               <Metric label="Stride length" value={num(m.strideLenPct)} unit="% ht" idx={ev.footStrike}/>
               <Metric label="Stride time" value={num(m.strideTimeMs)} unit="ms" idx={ev.footLift}/>
             </div>

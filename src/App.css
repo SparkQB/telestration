@@ -350,3 +350,5 @@ input  { outline: none; }
   .pose-btn .btn-label { display: none; }
   .pose-btn { padding: 6px 8px; }
 }
+.tp-metric.exp .tp-mval { color: rgba(248,248,248,0.55); }
+.tp-exp { font-size: 10px; font-weight: 600; color: #FFD54F; text-transform: uppercase; letter-spacing: .5px; }
